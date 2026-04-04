@@ -8,11 +8,11 @@ from datetime import datetime, timedelta
 
 # Константы
 PRODUCTS = {
-    'Молоко': {'base_price': 80, 'elasticity': 2.0, 'base_sales': 300},
-    'Хлеб': {'base_price': 50, 'elasticity': 1.5, 'base_sales': 250},
-    'Сок': {'base_price': 120, 'elasticity': 3.0, 'base_sales': 150},
-    'Кофе': {'base_price': 450, 'elasticity': 1.2, 'base_sales': 80},
-    'Шоколад': {'base_price': 100, 'elasticity': 2.5, 'base_sales': 200}
+    'Молоко': {'id': 1, 'base_price': 80, 'elasticity': 2.0, 'base_sales': 300},
+    'Хлеб': {'id': 2, 'base_price': 50, 'elasticity': 1.5, 'base_sales': 250},
+    'Сок': {'id': 3, 'base_price': 120, 'elasticity': 3.0, 'base_sales': 150},
+    'Кофе': {'id': 4, 'base_price': 450, 'elasticity': 1.2, 'base_sales': 80},
+    'Шоколад': {'id': 5, 'base_price': 100, 'elasticity': 2.5, 'base_sales': 200}
 }
 N_DAYS = 100
 SEED = 42
@@ -32,6 +32,7 @@ def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     np.random.seed(SEED + product_hash % 10000) # Уникальный seed для добавления шума каждому товару, сохраняя воспроизводимость
     
     params = PRODUCTS[product]
+    product_id = params['id']
     base_price = params['base_price']
     elasticity = params['elasticity']
     base_sales = params['base_sales']
@@ -61,6 +62,7 @@ def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     
     df = pd.DataFrame({
         'date': dates,
+        'product_id': product_id,
         'product': product,
         'our_price': our_prices,
         'competitor_price': competitor_prices,
