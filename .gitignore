@@ -1,25 +1,21 @@
-# Виртуальные окружения
-venv/
-.venv/
-.env
-
 # Python
 __pycache__/
-*.py[cod]
-*.so
-.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
 
-# Jupyter
-.ipynb_checkpoints/
+# Data
+data/sales_history.csv
+data/recommendations.csv
+data/plots/
 
-# Сгенерированные данные
-data/
-
-# IDE
+# IDEs
 .vscode/
 .idea/
-*.swp
 
-# OS
-.DS_Store
-Thumbs.db
+# Jupyter
+.ipynb_checkpoints

@@ -18,12 +18,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Импорты из центральной модели
 sys.path.append(str(Path(__file__).parent.parent))
-from config import PRODUCTS, N_DAYS, SEED
+from model.pricing import PRODUCTS, SEED
 
 
 def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     """Генерирует данные продаж для одного товара за n_days дней."""
+    # Фиксируем воспроизводимость для каждого товара
     product_hash = sum(ord(c) for c in product)
     np.random.seed(SEED + product_hash % 10000)
 
@@ -36,13 +38,22 @@ def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     start_date = end_date - timedelta(days=n_days - 1)
     dates = pd.date_range(start=start_date, end=end_date, freq='D')
 
+    # Цены колеблются вокруг базы
     our_prices = np.round(base_price * np.random.uniform(0.9, 1.1, size=n_days), 2)
     competitor_prices = np.round(our_prices * np.random.uniform(0.85, 1.15, size=n_days), 2)
 
-    price_deviation = our_prices - base_price
+    # Формула: Учитываем разницу с базой и разницу с конкурентом
+    # (our - comp) > 0 -> спрос падает
+    price_diff_base = our_prices - base_price
+    price_diff_comp = our_prices - competitor_prices
+    
     noise = np.random.normal(0, 5, size=n_days)
-    sales = np.maximum(0, np.round(base_sales - elasticity * price_deviation + noise))
-    revenue = sales * our_prices
+    # Основная эластичность + влияние конкурента (вес 0.5)
+    sales = np.maximum(0, np.round(
+        base_sales - elasticity * price_diff_base - 0.5 * elasticity * price_diff_comp + noise
+    ))
+    
+    revenue = np.round(sales * our_prices, 2)
 
     return pd.DataFrame({
         'date': dates,
@@ -55,9 +66,9 @@ def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     })
 
 
-def generate_all_data() -> pd.DataFrame:
+def generate_all_data(n_days: int) -> pd.DataFrame:
     """Объединяет данные всех товаров в один DataFrame."""
-    frames = [generate_product_data(p, N_DAYS) for p in PRODUCTS]
+    frames = [generate_product_data(p, n_days) for p in PRODUCTS]
     return pd.concat(frames, ignore_index=True).sort_values(['date', 'product']).reset_index(drop=True)
 
 
@@ -69,49 +80,48 @@ def save_data(df: pd.DataFrame, path: Path) -> None:
 
 
 def plot_data(df: pd.DataFrame) -> None:
-    """Строит и сохраняет графики: scatter (цена vs продажи), line (выручка по дням)."""
+    """Строит и сохраняет графики в папку data/plots."""
     plots_dir = Path(__file__).parent.parent / 'data' / 'plots'
     plots_dir.mkdir(parents=True, exist_ok=True)
 
-    # Scatter: our_price vs sales
+    # Scatter: Наша цена vs Продажи
     fig, ax = plt.subplots(figsize=(10, 6))
     for product in df['product'].unique():
         sub = df[df['product'] == product]
         ax.scatter(sub['our_price'], sub['sales'], label=product, alpha=0.7)
-    ax.set(title='Зависимость продаж от цены', xlabel='Наша цена', ylabel='Продажи')
+    ax.set(title='Зависимость продаж от цены (с учетом демпфирования конкурентов)', 
+           xlabel='Цена (₽)', ylabel='Продажи (шт)')
     ax.legend()
     ax.grid(True, linestyle='--', alpha=0.6)
     fig.savefig(plots_dir / 'price_vs_sales_scatter.png', bbox_inches='tight')
     plt.close(fig)
 
-    # Line: revenue по дням
-    fig, ax = plt.subplots(figsize=(12, 6))
-    daily_rev = df.groupby('date')['revenue'].sum()
-    ax.plot(daily_rev.index, daily_rev.values, marker='o', linestyle='-', color='#1f77b4')
-    ax.set(title='Суммарная выручка по дням', xlabel='Дата', ylabel='Выручка')
-    ax.grid(True, linestyle='--', alpha=0.6)
-    plt.xticks(rotation=45)
-    fig.savefig(plots_dir / 'daily_revenue_line.png', bbox_inches='tight')
-    plt.close(fig)
-
-    print(f"Графики сохранены: {plots_dir.absolute()}")
+    print(f"Графики сохранены в {plots_dir}")
 
 
 def main() -> None:
-    """Точка входа: генерация данных, вывод статистики, сохранение и графики."""
+    """Точка входа."""
     np.random.seed(SEED)
-    print("Генерация данных...")
-
-    df = generate_all_data()
-    data_path = Path(__file__).parent.parent / 'data' / 'sales_history.csv'
-
-    print(f"\nShape: {df.shape}")
-    print(f"\n{df.head()}")
-    print(f"\n{df.describe()}")
+    n_days = 60  # Генерируем за последние 2 месяца
+    
+    print(f"Генерация данных за {n_days} дней...")
+    df = generate_all_data(n_days)
+    
+    base_dir = Path(__file__).parent.parent
+    data_path = base_dir / 'data' / 'sales_history.csv'
 
     save_data(df, data_path)
     plot_data(df)
-    print("Готово.")
+    
+    print("\nПример данных:")
+    print(df.head())
+    print("\nКорреляция Цена-Продажи (должна быть < 0):")
+    for p in PRODUCTS:
+        sub = df[df['product'] == p]
+        corr = sub['our_price'].corr(sub['sales'])
+        print(f" - {p}: {corr:.4f}")
+
+    print("\nГенерация завершена успешно.")
 
 
 if __name__ == '__main__':
