@@ -1,21 +1,16 @@
+import sys
+from pathlib import Path
+from datetime import datetime, timedelta
+
 import pandas as pd
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from pathlib import Path
-from datetime import datetime, timedelta
 
-# Константы
-PRODUCTS = {
-    'Молоко': {'id': 1, 'base_price': 80, 'elasticity': 2.0, 'base_sales': 300},
-    'Хлеб': {'id': 2, 'base_price': 50, 'elasticity': 1.5, 'base_sales': 250},
-    'Сок': {'id': 3, 'base_price': 120, 'elasticity': 3.0, 'base_sales': 150},
-    'Кофе': {'id': 4, 'base_price': 450, 'elasticity': 1.2, 'base_sales': 80},
-    'Шоколад': {'id': 5, 'base_price': 100, 'elasticity': 2.5, 'base_sales': 200}
-}
-N_DAYS = 100
-SEED = 42
+# Добавляем корень проекта в пути импорта
+sys.path.append(str(Path(__file__).parent.parent))
+from config import PRODUCTS, N_DAYS, SEED
 
 def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     """
