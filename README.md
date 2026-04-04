@@ -1,51 +1,32 @@
 # Алгоритм динамического ценообразования для ритейла (MVP)
 
-Проект для генерации, анализа и применения алгоритмов динамического ценообразования для ритейла.
-
 ## Структура проекта
 
 ```
 Reteil/
-├── config.py                  # Общие константы (PRODUCTS, SEED, N_DAYS)
-├── requirements.txt           # Зависимости проекта
-├── recommender.py             # Rule-based рекомендатор (автономный скрипт)
-├── generate_nb.py             # Генератор Jupyter-ноутбука (вспомогательный)
+├── config.py                  # Константы (PRODUCTS, SEED, N_DAYS)
+├── requirements.txt           # Зависимости
+├── recommender.py             # Rule-based рекомендатор
 ├── generator/
-│   └── generate_data.py       # Генератор синтетических данных продаж
-├── data/
-│   ├── sales_history.csv      # Сгенерированный датасет (100 дней × 5 товаров)
-│   ├── recommendations.csv    # Рекомендации от recommender.py
-│   ├── recommendations_rules.csv      # Рекомендации (эвристика) из ноутбука
-│   ├── recommendations_regression.csv # Рекомендации (регрессия) из ноутбука
-│   └── plots/                 # Графики из генератора
+│   └── generate_data.py       # Генератор синтетических данных
+├── ui/
+│   └── app.py                 # Streamlit-интерфейс
 ├── notebook/
-│   └── pricing_mvp.ipynb      # Основной MVP-ноутбук (EDA + модели + симуляция)
-├── model/                     # (зарезервировано для будущих моделей)
-└── ui/                        # (зарезервировано для интерфейса)
+│   ├── pricing_mvp.ipynb      # MVP-ноутбук (EDA + модели + симуляция)
+│   └── pricing_mvp.html       # HTML-отчёт для просмотра в браузере
+└── data/                      # Генерируемые данные (в .gitignore)
+    ├── sales_history.csv
+    ├── recommendations.csv
+    └── plots/
 ```
 
 ## Быстрый старт
 
-### 1. Установить зависимости
 ```bash
 pip install -r requirements.txt
-```
-
-### 2. Сгенерировать данные
-```bash
 python generator/generate_data.py
+streamlit run ui/app.py
 ```
-
-### 3. Открыть ноутбук в Jupyter
-```bash
-jupyter notebook notebook/pricing_mvp.ipynb
-```
-
-### 4. Экспорт в HTML (веб-страница с отчётом)
-```bash
-jupyter nbconvert --to html notebook/pricing_mvp.ipynb
-```
-После этого откройте файл `notebook/pricing_mvp.ipynb.html` в браузере.
 
 ## Товары
 
@@ -59,4 +40,4 @@ jupyter nbconvert --to html notebook/pricing_mvp.ipynb
 
 ## Стек
 
-Python 3.11 · Pandas · NumPy · scikit-learn · matplotlib · Jupyter Notebook
+Python 3.11 · Pandas · NumPy · scikit-learn · matplotlib · Jupyter · Streamlit

@@ -1,30 +1,25 @@
 # Виртуальные окружения
 venv/
-env/
-.env
 .venv/
+.env
 
-# Python кэш и артефакты
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
 .pytest_cache/
 
-# Jupyter Notebooks
+# Jupyter
 .ipynb_checkpoints/
 
-# Сгенерированные данные и графики
-data/sales_history.csv
-data/plots/
-*.csv
-*.png
+# Сгенерированные данные
+data/
 
-# IDE (VS Code, PyCharm, etc.)
+# IDE
 .vscode/
 .idea/
 *.swp
-*.swo
 
-# MacOS артефакты
+# OS
 .DS_Store
+Thumbs.db
