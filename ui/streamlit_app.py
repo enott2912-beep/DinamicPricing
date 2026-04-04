@@ -20,7 +20,7 @@ st.set_page_config(
 )
 
 st.markdown("""
-    /* Стили для карточек метрик (совместимо с темной темой) */
+    <style>
     div[data-testid="stMetric"] {
         background-color: rgba(28, 131, 225, 0.05);
         border: 1px solid rgba(128, 128, 128, 0.2);
@@ -119,9 +119,9 @@ elif nav == "💡 Рекомендации":
     c1, c2, c3 = st.columns(3)
     with c1:
         st.subheader("Текущее состояние")
-        st.write(f"Цена: **{last_row['our_price']:.2f} ₽**")
-        st.write(f"Конкурент: **{last_row['competitor_price']:.2f} ₽**")
-        st.write(f"Выручка (посл. день): **{last_row['revenue']:.2f} ₽**")
+        st.metric("Наша цена", f"{last_row['our_price']:.2f} ₽")
+        st.metric("Цена конкурента", f"{last_row['competitor_price']:.2f} ₽")
+        st.metric("Выручка (день)", f"{last_row['revenue']:.2f} ₽")
         
     with c2:
         st.subheader("Эвристика")
