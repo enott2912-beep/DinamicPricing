@@ -2,11 +2,13 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
-# ==========================================
-# КОНСТАНТЫ (Единственный источник правды)
-# ==========================================
+# ############################################################################
+# 1. КОНСТАНТЫ И КОНФИГУРАЦИЯ (Единый источник правды)
+# ############################################################################
+
 SEED = 42
 
+# Базовая информация о товарах: ID, стартовая цена, эластичность и базовый спрос
 PRODUCTS = {
     'Молоко':   {'id': 1, 'base_price': 80,  'elasticity': 2.0, 'base_sales': 300},
     'Хлеб':     {'id': 2, 'base_price': 50,  'elasticity': 1.5, 'base_sales': 250},
@@ -15,23 +17,33 @@ PRODUCTS = {
     'Шоколад':  {'id': 5, 'base_price': 100, 'elasticity': 2.5, 'base_sales': 200},
 }
 
-# ==========================================
-# ЛОГИКА ЦЕНООБРАЗОВАНИЯ (БИЗНЕС-ПРАВИЛА)
-# ==========================================
+# ############################################################################
+# 2. ЭВРИСТИЧЕСКОЕ ЦЕНООБРАЗОВАНИЕ (RULE-BASED)
+# ############################################################################
 
 def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
     """
-    Эвристические правила (rule-based).
-    Возвращает (рекомендованная_цена, название_правила).
+    Применяет бизнес-правила к текущему состоянию рынка для рекомендации цены.
+    
+    Аргументы:
+        row: pd.Series с данными одного дня (our_price, competitor_price, sales).
+        avg_sales_7d: Средние продажи за последние 7 дней.
+        
+    Возвращает:
+        tuple (рекомендованная_цена, название_правила).
     """
     price = row['our_price']
     
-    # Правило 1: Реакция на конкурента (Спринт 2)
+    # ПРАВИЛО 0: Строгое соответствие ТЗ Спринта 2 (если продаж совсем не было)
+    if row['sales'] == 0:
+        return round(price - 1.0, 2), "zero_sales_strict"
+
+    # ПРАВИЛО 1: Реакция на конкурента (Спринт 2)
     # Если конкурент значительно дешевле (на 10% и более), снижаем цену на 5%
     if row['competitor_price'] < price * 0.90:
         return round(price * 0.95, 2), "competitor_undercut"
     
-    # Правило 2: Реакция на падение спроса (Спринт 2)
+    # ПРАВИЛО 2: Реакция на падение спроса (Спринт 2)
     # Если продажи за вчера на 20% ниже скользящего среднего, пробуем стимулировать спрос
     if row['sales'] < avg_sales_7d * 0.80:
         return round(price - 1.0, 2), "low_sales"
@@ -39,10 +51,18 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
     return price, "hold"
 
 
+# ############################################################################
+# 3. МАТЕМАТИЧЕСКАЯ ОБТИМИЗАЦИЯ И РЕГРЕССИЯ
+# ############################################################################
+
+
 def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float, bool]:
     """
-    Обучает регрессию Sales = A - B * Price.
-    Возвращает (a, b, optimal_price, is_reliable).
+    Обучает линейную регрессию Sales = A - B * Price для выбранного товара.
+    Вычисляет оптимальную цену через экстремум функции выручки Rev = P * (A - B*P).
+    
+    Возвращает:
+        tuple (параметр_A, параметр_B, оптимальная_цена, флаг_надежности).
     """
     prod_data = df[df['product'] == product]
     if len(prod_data) < 3:
@@ -55,30 +75,32 @@ def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float,
     model = LinearRegression().fit(X, y)
     a = model.intercept_
     coef = float(model.coef_[0])
+    
+    # Проверка на адекватность модели (эластичность должна быть отрицательной)
     is_reliable = coef < 0
     b = -coef if coef < 0 else 0.0
     
     # МАТЕМАТИЧЕСКАЯ МОДЕЛЬ (Спринт 3):
     # Выручка (Revenue) = P * (A - B*P) = AP - BP^2
-    # Для максимизации ищем производную dRev/dP:
-    # dRev/dP = A - 2BP. Приравниваем к нулю: A - 2BP = 0 -> P = A / 2B
-    optimal_price = round(a / (2 * b), 2) if b > 0 else float(prod_data['our_price'].mean())
+    # Производная dRev/dP = A - 2BP. Максимум при A - 2BP = 0 -> P = A / 2B.
+    if b > 0:
+        optimal_price = round(a / (2 * b), 2)
+    else:
+        optimal_price = float(prod_data['our_price'].mean())
     
     return float(a), float(b), float(optimal_price), is_reliable
 
 
 def forecast(product: str, recommended_price: float, current_revenue: float) -> dict:
     """
-    Прогноз выручки на основе эластичности из конфига.
+    Прогноз выручки на основе 'идеальной' эластичности из конфигурации PRODUCTS.
     """
     p = PRODUCTS[product]
-    # Формула с учетом эластичности
     price_dev = recommended_price - p['base_price']
     pred_sales = max(0, round(p['base_sales'] - p['elasticity'] * price_dev))
     pred_revenue = pred_sales * recommended_price
     
     growth_pct = ((pred_revenue - current_revenue) / current_revenue * 100) if current_revenue > 0 else 0.0
-    
     return {
         'forecast_sales': pred_sales,
         'forecast_revenue': round(pred_revenue, 2),
@@ -88,7 +110,7 @@ def forecast(product: str, recommended_price: float, current_revenue: float) -> 
 
 def forecast_from_regression(a: float, b: float, recommended_price: float, current_revenue: float) -> dict:
     """
-    Прогноз выручки из параметров регрессии Sales = A - B*Price.
+    Прогноз выручки на основе вычисленных параметров регрессии (реальные данные).
     """
     pred_sales = max(0, round(a - b * recommended_price))
     pred_revenue = pred_sales * recommended_price
@@ -100,18 +122,36 @@ def forecast_from_regression(a: float, b: float, recommended_price: float, curre
     }
 
 
-def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
+# ############################################################################
+# 4. МОДУЛЬ СИМУЛЯЦИИ (TIME-ROLL FORWARD)
+# ############################################################################
+
+
+def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = None) -> pd.DataFrame:
     """
-    Симуляция рынка на n_steps вперед.
-    method: 'rules' или 'regression'
+    Запускает циклическую симуляцию рынка (MVP Спринт 4).
+    Алгоритм: Оценка -> Выбор цены -> Генерация продаж -> Обновление данных -> Повтор.
+    
+    Аргументы:
+        df: Исторические данные (на которых обучаются модели).
+        n_steps: Горизонт прогнозирования (количество дней).
+        method: 'rules' (эвристики) или 'regression' (математическая оптимизация).
+        target_product: Продукт для симуляции (если None, симулируются все доступные).
+        
+    Возвращает:
+        pd.DataFrame: Набор данных, включающий историю и сгенерированные шаги.
     """
     np.random.seed(SEED)
     sim_df = df.copy()
     
-    present_products = [p for p in PRODUCTS if (sim_df['product'] == p).any()]
+    if target_product and target_product != "Все товары":
+        present_products = [target_product]
+    else:
+        present_products = [p for p in PRODUCTS if (sim_df['product'] == p).any()]
+    
     retrain_every = 3
 
-    # Предрасчет цен для регрессии
+    # 1. Начальный расчет цен для метода оптимизации
     prices_map = {}
     if method == 'regression':
         for prod in present_products:
@@ -121,6 +161,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
                 opt_p = last_price
             prices_map[prod] = opt_p
 
+    # 2. Основной цикл симуляции по дням
     for step in range(n_steps):
         if method == 'regression' and step % retrain_every == 0:
             for prod in present_products:

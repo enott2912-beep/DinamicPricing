@@ -43,6 +43,7 @@ st.markdown(
 # ==========================================
 # ЗАГРУЗКА ДАННЫХ
 # ==========================================
+@st.cache_data
 def load_data(uploaded_file=None):
     if uploaded_file is not None:
         df = pd.read_csv(uploaded_file)
@@ -79,7 +80,6 @@ def load_data(uploaded_file=None):
 CHART_LABELS = [
     "Точечный",
     "Линейный",
-    "Круговая диаграмма",
     "Столбчатая диаграмма",
     "Гистограмма",
 ]
@@ -250,13 +250,23 @@ def apply_overview_date_filter(prod_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_product_df_with_period(df: pd.DataFrame, product: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Возвращает сырые и отфильтрованные по календарю данные товара."""
-    prod_df_raw = df[df["product"] == product].sort_values("date")
+    """
+    Возвращает пару (исходные_данные, отфильтрованные_по_календарю).
+    Если product == "Все товары", возвращается весь датасет.
+    """
+    if product == "Все товары":
+        prod_df_raw = df.sort_values("date")
+    else:
+        prod_df_raw = df[df["product"] == product].sort_values("date")
+        
     if len(prod_df_raw) == 0:
         return prod_df_raw, prod_df_raw
+        
     available_dates = set(prod_df_raw["date"].dt.date)
+    # Инициализируем сессию календаря (общая для всех вкладок)
     _init_overview_session(product, available_dates)
     prod_df_period = apply_overview_date_filter(prod_df_raw)
+    
     return prod_df_raw, prod_df_period
 
 
@@ -280,27 +290,30 @@ def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str) -> None:
         ax.set_xlabel("Цена (₽)")
         ax.set_ylabel("Продажи (шт)")
     elif kind == "Столбчатая диаграмма":
-        g = (
-            prod_df.groupby("our_price", as_index=False)["sales"]
-            .sum()
-            .sort_values("our_price")
-        )
-        ax.bar(g["our_price"].astype(str), g["sales"], color="#1f77b4", alpha=0.85)
-        ax.set_xlabel("Цена (₽)")
+        # Чтобы цифры не налазили друг на друга, группируем цены в бины (шаг побольше)
+        # Если уникальных цен много (> 10), используем 8 корзин. Иначе - как есть.
+        unique_prices = np.sort(prod_df["our_price"].unique())
+        if len(unique_prices) > 10:
+            bins = np.linspace(unique_prices.min(), unique_prices.max(), 9)
+            labels = [f"{bins[i]:.0f}-{bins[i+1]:.0f}" for i in range(len(bins)-1)]
+            prod_df['price_bin'] = pd.cut(prod_df['our_price'], bins=bins, labels=labels, include_lowest=True)
+            g = prod_df.groupby('price_bin', as_index=False)['sales'].sum()
+            ax.bar(g['price_bin'].astype(str), g['sales'], color="#1f77b4", alpha=0.85)
+            ax.set_xlabel("Диапазон цены (₽)")
+        else:
+            g = prod_df.groupby("our_price", as_index=False)["sales"].sum().sort_values("our_price")
+            ax.bar(g["our_price"].astype(str), g["sales"], color="#1f77b4", alpha=0.85)
+            ax.set_xlabel("Цена (₽)")
+        
         ax.set_ylabel("Продажи (шт)")
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
-    elif kind == "Круговая диаграмма":
-        g = prod_df.groupby("our_price", as_index=False)["sales"].sum()
-        labels = [f"{row.our_price} ₽" for _, row in g.iterrows()]
-        ax.pie(g["sales"], labels=labels, autopct="%1.0f%%", textprops={"fontsize": 8})
-        ax.set_ylabel("")
     elif kind == "Гистограмма":
         bins = min(20, max(5, len(prod_df) // 3))
         ax.hist(x, bins=bins, weights=y, color="#1f77b4", alpha=0.75, edgecolor="white")
         ax.set_xlabel("Цена (₽)")
         ax.set_ylabel("Сумма продаж (вес по дням)")
-    if kind != "Круговая диаграмма":
-        ax.grid(True, alpha=0.3)
+    
+    ax.grid(True, alpha=0.3)
 
 
 def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str) -> None:
@@ -329,8 +342,8 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str) -> None:
     elif kind == "Столбчатая диаграмма":
         x = np.arange(len(prod_df))
         w = 0.35
-        ax.bar(x - w / 2, p1, width=w, label="Наша цена", alpha=0.85)
-        ax.bar(x + w / 2, p2, width=w, label="Конкурент", alpha=0.85)
+        ax.bar(x - w / 2, p1, width=w, label="Наша цена", alpha=1.0)
+        ax.bar(x + w / 2, p2, width=w, label="Конкурент", alpha=0.8)
         ax.set_xticks(x)
         ax.set_xticklabels(
             [pd.Timestamp(ti).strftime("%m-%d") for ti in t], rotation=45, ha="right"
@@ -355,8 +368,6 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str) -> None:
         ax.set_xlabel("Цена (₽)")
         ax.set_ylabel("Число дней")
         ax.legend()
-    if kind != "Круговая диаграмма":
-        ax.grid(True, alpha=0.3)
 
 
 # ==========================================
@@ -385,11 +396,11 @@ if df is None:
 st.sidebar.divider()
 
 # Выбор товара и метода
-product_list = list(df["product"].unique())
+product_list = sorted(list(df["product"].unique()))
 selected_product = st.sidebar.selectbox("Выберите товар", product_list)
 nav = st.sidebar.radio(
     "Раздел",
-    ["📊 Обзор", "💡 Рекомендации", "🔮 Симуляция", "🔮 Симуляция товара"],
+    ["📊 Обзор", "💡 Рекомендации", "🔮 Симуляция"],
 )
 
 # ==========================================
@@ -537,122 +548,78 @@ elif nav == "💡 Рекомендации":
 elif nav == "🔮 Симуляция":
     st.title("🔮 Симуляция будущего")
 
-    col1, col2 = st.columns(2)
-    n_days = col1.slider("Горизонт симуляции (дней)", 7, 30, 14)
-    method = col2.selectbox("Метод принятия решений", ["regression", "rules"])
+    # Отображение информации о периоде обучения (из календаря на вкладке Обзор)
+    rs = st.session_state.get("ov_range_start")
+    re = st.session_state.get("ov_range_end")
+    if rs:
+        period_text = f"**{rs}** — **{re if re else '...'}**"
+        st.info(f"💡 Модели будут обучаться на историческом периоде: {period_text}. "
+                "Вы можете изменить его в календаре на вкладке '📊 Обзор'.")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    sim_scope_options = ["Все товары"] + sorted(list(df["product"].unique()))
+    sim_scope = col1.selectbox("Область симуляции", sim_scope_options)
+    
+    n_steps = col2.slider("Горизонт симуляции (дней)", 7, 30, 14)
+    method = col3.selectbox("Метод принятия решений", ["regression", "rules"])
 
     if st.button("Запустить симуляцию", type="primary"):
+        # Подготовка данных периода (Знания для модели)
+        _, prod_df_period = get_product_df_with_period(df, sim_scope)
+        
+        if len(prod_df_period) < 2:
+            st.error("⛔ Слишком короткий период для обучения. Выберите диапазон пошире в календаре.")
+            st.stop()
+
         with st.spinner("Рынок просчитывается..."):
-            simulated_df = simulate(df, n_days, method)
+            # Вызов ядра симуляции
+            simulated_df = simulate(prod_df_period, n_steps, method, target_product=sim_scope)
 
-        st.success(f"Симуляция на {n_days} дней по методу '{method}' завершена!")
+        st.success(f"✅ Симуляция завершена!")
 
-        # Сравнение выручки
-        hist_rev = df.groupby("date")["revenue"].sum()
-        sim_rev = simulated_df.groupby("date")["revenue"].sum()
+        # Визуализация результатов (используем только выбранный период истории)
+        if sim_scope == "Все товары":
+            hist_rev = prod_df_period.groupby("date")["revenue"].sum()
+            sim_rev = simulated_df.groupby("date")["revenue"].sum()
+            title_suffix = "по всем товарам"
+        else:
+            hist_rev = prod_df_period[prod_df_period["product"] == sim_scope].groupby("date")["revenue"].sum()
+            sim_rev = simulated_df[simulated_df["product"] == sim_scope].groupby("date")["revenue"].sum()
+            title_suffix = f"по товару '{sim_scope}'"
 
         fig, ax = plt.subplots(figsize=(12, 5))
-        ax.plot(hist_rev.index, hist_rev.values, label="История", color="blue")
+        ax.plot(hist_rev.index, hist_rev.values, label="Выбранная история", color="blue", linewidth=1.5)
         ax.plot(
             sim_rev.index[len(hist_rev) - 1 :],
             sim_rev.values[len(hist_rev) - 1 :],
-            label="Симуляция",
+            label=f"Прогноз ({method})",
             color="green",
             ls="--",
+            linewidth=2
         )
-        ax.axvline(df["date"].max(), color="black", alpha=0.2)
-        ax.set_ylabel("Суммарная выручка по всем товарам (₽)")
-        ax.legend()
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-
-        avg_hist = hist_rev.mean()
-        avg_sim = (
-            simulated_df[simulated_df["date"] > df["date"].max()]
-            .groupby("date")["revenue"]
-            .sum()
-            .mean()
-        )
-        delta = (avg_sim - avg_hist) / avg_hist * 100
-
-        st.metric(
-            "Средняя выручка в день (Sim vs Hist)",
-            f"{avg_sim:,.0f} ₽",
-            f"{delta:+.1f}%",
-        )
-
-        st.subheader("Детали симуляции (последние записи)")
-        st.dataframe(simulated_df.tail(10), use_container_width=True)
-
-elif nav == "🔮 Симуляция товара":
-    st.title(f"🔮 Симуляция по товару: {selected_product}")
-
-    _, prod_df = get_product_df_with_period(df, selected_product)
-    if len(prod_df) == 0:
-        st.warning("За выбранный период нет данных по товару.")
-        st.stop()
-
-    rs = st.session_state.ov_range_start
-    re = st.session_state.ov_range_end
-    if re is not None:
-        st.caption(f"Период истории для симуляции: **{rs}** — **{re}**")
-    elif st.session_state.ov_pending_second:
-        st.caption(
-            f"Период истории для симуляции: с **{rs}** до последней даты в таблице."
-        )
-
-    col1, col2 = st.columns(2)
-    n_days = col1.slider(
-        "Горизонт симуляции (дней)", 7, 30, 14, key="prod_sim_n_days"
-    )
-    method = col2.selectbox(
-        "Метод принятия решений", ["regression", "rules"], key="prod_sim_method"
-    )
-
-    if st.button("Запустить симуляцию", type="primary", key="run_product_sim"):
-        with st.spinner("Рынок просчитывается..."):
-            simulated_df = simulate(prod_df, n_days, method)
-
-        st.success(
-            f"Симуляция товара '{selected_product}' на {n_days} дней по методу '{method}' завершена!"
-        )
-
-        hist_rev = prod_df.groupby("date")["revenue"].sum()
-        sim_rev = simulated_df.groupby("date")["revenue"].sum()
-
-        fig, ax = plt.subplots(figsize=(12, 5))
-        ax.plot(hist_rev.index, hist_rev.values, label="История", color="blue")
-        ax.plot(
-            sim_rev.index[len(hist_rev) - 1 :],
-            sim_rev.values[len(hist_rev) - 1 :],
-            label="Симуляция",
-            color="green",
-            ls="--",
-        )
-        ax.axvline(prod_df["date"].max(), color="black", alpha=0.2)
-        ax.set_ylabel(f"Выручка по товару '{selected_product}' (₽)")
+        max_period_date = prod_df_period["date"].max()
+        ax.axvline(max_period_date, color="black", alpha=0.3, linestyle=':')
+        ax.set_ylabel(f"Выручка {title_suffix} (₽)")
+        ax.set_title(f"Сценарный прогноз на {n_steps} дней (от {max_period_date.date()})")
         ax.legend()
         plt.xticks(rotation=45)
         st.pyplot(fig)
         plt.close(fig)
 
+        # Сводные показатели
         avg_hist = hist_rev.mean()
-        avg_sim = (
-            simulated_df[simulated_df["date"] > prod_df["date"].max()]
-            .groupby("date")["revenue"]
-            .sum()
-            .mean()
-        )
+        avg_sim = sim_rev[sim_rev.index > df["date"].max()].mean()
         delta = (avg_sim - avg_hist) / avg_hist * 100 if avg_hist else 0.0
 
-        st.metric(
-            "Средняя выручка в день (Sim vs Hist)",
+        m1, m2 = st.columns(2)
+        m1.metric(
+            f"Ожидаемая выручка/день",
             f"{avg_sim:,.0f} ₽",
             f"{delta:+.1f}%",
+            help="Среднее значение выручки за период симуляции в сравнении с историческим средним."
         )
+        
+        st.subheader("📋 Детализация прогноза (последние шаги)")
+        st.dataframe(simulated_df.tail(10), use_container_width=True)
 
-        st.subheader("Детали симуляции (последние записи)")
-        st.dataframe(
-            simulated_df[simulated_df["product"] == selected_product].tail(10),
-            use_container_width=True,
-        )
