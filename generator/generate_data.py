@@ -96,13 +96,24 @@ def plot_data(df: pd.DataFrame) -> None:
     fig.savefig(plots_dir / 'price_vs_sales_scatter.png', bbox_inches='tight')
     plt.close(fig)
 
+    # Линейный: Выручка по дням
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    revenue_daily = df.groupby('date')['revenue'].sum()
+    ax2.plot(revenue_daily.index, revenue_daily.values, color='green', marker='o', linestyle='-', alpha=0.8)
+    ax2.set(title='Общая ежедневная выручка (все товары)', 
+            xlabel='Дата', ylabel='Выручка (₽)')
+    ax2.grid(True, linestyle='--', alpha=0.6)
+    plt.xticks(rotation=45)
+    fig2.savefig(plots_dir / 'daily_revenue_line.png', bbox_inches='tight')
+    plt.close(fig2)
+
     print(f"Графики сохранены в {plots_dir}")
 
 
 def main() -> None:
     """Точка входа."""
     np.random.seed(SEED)
-    n_days = 60  # Генерируем за последние 2 месяца
+    n_days = 100  # Генерируем за последние 100 дней (Спринт 1: 100 дней, 5 товаров)
     
     print(f"Генерация данных за {n_days} дней...")
     df = generate_all_data(n_days)

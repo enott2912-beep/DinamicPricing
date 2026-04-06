@@ -17,7 +17,7 @@ PRODUCTS = {
 }
 
 # ==========================================
-# ЛОГИКА ЦЕНООБРАЗОВАНИЯ
+# ЛОГИКА ЦЕНООБРАЗОВАНИЯ (БИЗНЕС-ПРАВИЛА)
 # ==========================================
 
 def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
@@ -27,11 +27,13 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
     """
     price = row['our_price']
     
-    # Правило 1: Конкурент демпингует (дешевле на 10%+)
+    # Правило 1: Реакция на конкурента (Спринт 2)
+    # Если конкурент значительно дешевле (на 10% и более), снижаем цену на 5%
     if row['competitor_price'] < price * 0.90:
         return round(price * 0.95, 2), "competitor_undercut"
     
-    # Правило 2: Низкие продажи (ниже среднего на 20%+)
+    # Правило 2: Реакция на падение спроса (Спринт 2)
+    # Если продажи за вчера на 20% ниже скользящего среднего, пробуем стимулировать спрос
     if row['sales'] < avg_sales_7d * 0.80:
         return round(price - 1.0, 2), "low_sales"
     
@@ -52,9 +54,12 @@ def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float]
     
     model = LinearRegression().fit(X, y)
     a = model.intercept_
-    b = abs(model.coef_[0])  # Берем по модулю, так как ожидаем отрицательную корреляцию
+    b = abs(model.coef_[0])  # Ожидаем отрицательную корреляцию (коэффициент при цене < 0)
     
-    # Математика: Revenue = P * (A - B*P) -> dRev/dP = A - 2BP = 0 -> P = A / 2B
+    # МАТЕМАТИЧЕСКАЯ МОДЕЛЬ (Спринт 3):
+    # Выручка (Revenue) = P * (A - B*P) = AP - BP^2
+    # Для максимизации ищем производную dRev/dP:
+    # dRev/dP = A - 2BP. Приравниваем к нулю: A - 2BP = 0 -> P = A / 2B
     optimal_price = round(a / (2 * b), 2) if b != 0 else prod_data['our_price'].mean()
     
     return a, b, optimal_price
@@ -95,6 +100,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
             prices_map[prod] = opt_p
 
     for _ in range(n_steps):
+        # В симуляции мы берем последнюю точку и генерируем следующую
         last_date = sim_df['date'].max()
         next_date = last_date + pd.Timedelta(days=1)
         
@@ -104,20 +110,21 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
             if hist.empty: continue
             last = hist.iloc[-1]
             
-            # Выбор цены
+            # ВЫБОР ЦЕНЫ: по правилам или по регрессии
             if method == 'rules':
                 avg7 = hist['sales'].tail(7).mean()
                 rec_price, _ = apply_rules(last, avg7)
             else:
                 rec_price = prices_map.get(prod, last['our_price'])
             
-            # Генерация новых продаж (с шумом)
+            # ГЕНЕРАЦИЯ НОВОГО СПРОСА (Симуляция Спринта 4)
+            # Учитываем эластичность к нашей цене и разницу с конкурентом
             dev = rec_price - p_info['base_price']
-            # Также добавим минорное влияние цены конкурента (которая остается прежней в симуляции)
             comp_dev = rec_price - last['competitor_price']
             
-            noise = np.random.normal(0, 5)
-            # Базовая формула + влияние конкурента (0.5 * эластичность)
+            noise = np.random.normal(0, 5) # Случайный шум рынка
+            
+            # Формула: Базовый спрос - (эластичность * отклонение от базы) - (влияние конкурента)
             new_sales = max(0, round(p_info['base_sales'] - p_info['elasticity']*dev - 0.5*p_info['elasticity']*comp_dev + noise))
             
             new_rows.append({
@@ -125,7 +132,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
                 'product_id': p_info['id'],
                 'product': prod,
                 'our_price': rec_price,
-                'competitor_price': last['competitor_price'],
+                'competitor_price': last['competitor_price'], # Предполагаем, что конкурент не меняет цену в базе
                 'sales': new_sales,
                 'revenue': round(new_sales * rec_price, 2)
             })
