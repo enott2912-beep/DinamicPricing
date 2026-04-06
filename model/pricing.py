@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
-from pathlib import Path
 
 # ==========================================
 # КОНСТАНТЫ (Единственный источник правды)
@@ -40,29 +39,32 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
     return price, "hold"
 
 
-def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float]:
+def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float, bool]:
     """
     Обучает регрессию Sales = A - B * Price.
-    Возвращает (a, b, optimal_price).
+    Возвращает (a, b, optimal_price, is_reliable).
     """
     prod_data = df[df['product'] == product]
-    if prod_data.empty:
-        return 0.0, 0.0, 0.0
+    if len(prod_data) < 3:
+        fallback = float(prod_data['our_price'].mean()) if len(prod_data) else 0.0
+        return 0.0, 0.0, fallback, False
         
     X = prod_data['our_price'].values.reshape(-1, 1)
     y = prod_data['sales'].values
     
     model = LinearRegression().fit(X, y)
     a = model.intercept_
-    b = abs(model.coef_[0])  # Ожидаем отрицательную корреляцию (коэффициент при цене < 0)
+    coef = float(model.coef_[0])
+    is_reliable = coef < 0
+    b = -coef if coef < 0 else 0.0
     
     # МАТЕМАТИЧЕСКАЯ МОДЕЛЬ (Спринт 3):
     # Выручка (Revenue) = P * (A - B*P) = AP - BP^2
     # Для максимизации ищем производную dRev/dP:
     # dRev/dP = A - 2BP. Приравниваем к нулю: A - 2BP = 0 -> P = A / 2B
-    optimal_price = round(a / (2 * b), 2) if b != 0 else prod_data['our_price'].mean()
+    optimal_price = round(a / (2 * b), 2) if b > 0 else float(prod_data['our_price'].mean())
     
-    return a, b, optimal_price
+    return float(a), float(b), float(optimal_price), is_reliable
 
 
 def forecast(product: str, recommended_price: float, current_revenue: float) -> dict:
@@ -84,6 +86,20 @@ def forecast(product: str, recommended_price: float, current_revenue: float) -> 
     }
 
 
+def forecast_from_regression(a: float, b: float, recommended_price: float, current_revenue: float) -> dict:
+    """
+    Прогноз выручки из параметров регрессии Sales = A - B*Price.
+    """
+    pred_sales = max(0, round(a - b * recommended_price))
+    pred_revenue = pred_sales * recommended_price
+    growth_pct = ((pred_revenue - current_revenue) / current_revenue * 100) if current_revenue > 0 else 0.0
+    return {
+        'forecast_sales': pred_sales,
+        'forecast_revenue': round(pred_revenue, 2),
+        'growth_pct': round(growth_pct, 1)
+    }
+
+
 def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
     """
     Симуляция рынка на n_steps вперед.
@@ -92,20 +108,35 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
     np.random.seed(SEED)
     sim_df = df.copy()
     
-    # Предрасчет цен для регрессии (чтобы не пересчитывать в цикле)
+    present_products = [p for p in PRODUCTS if (sim_df['product'] == p).any()]
+    retrain_every = 3
+
+    # Предрасчет цен для регрессии
     prices_map = {}
     if method == 'regression':
-        for prod in PRODUCTS:
-            _, _, opt_p = fit_regression(sim_df, prod)
+        for prod in present_products:
+            _, _, opt_p, is_reliable = fit_regression(sim_df, prod)
+            if not is_reliable:
+                last_price = float(sim_df[sim_df['product'] == prod].iloc[-1]['our_price'])
+                opt_p = last_price
             prices_map[prod] = opt_p
 
-    for _ in range(n_steps):
+    for step in range(n_steps):
+        if method == 'regression' and step % retrain_every == 0:
+            for prod in present_products:
+                _, _, opt_p, is_reliable = fit_regression(sim_df, prod)
+                if not is_reliable:
+                    last_price = float(sim_df[sim_df['product'] == prod].iloc[-1]['our_price'])
+                    opt_p = last_price
+                prices_map[prod] = opt_p
+
         # В симуляции мы берем последнюю точку и генерируем следующую
         last_date = sim_df['date'].max()
         next_date = last_date + pd.Timedelta(days=1)
         
         new_rows = []
-        for prod, p_info in PRODUCTS.items():
+        for prod in present_products:
+            p_info = PRODUCTS[prod]
             hist = sim_df[sim_df['product'] == prod]
             if hist.empty: continue
             last = hist.iloc[-1]
@@ -117,12 +148,24 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
             else:
                 rec_price = prices_map.get(prod, last['our_price'])
             
+            # Конкурент тоже движется: возврат к своей базе + реакция на нашу цену + шум
+            prev_comp = float(last['competitor_price'])
+            comp_base = float(p_info['base_price'] * 1.03)
+            competitor_price = (
+                0.70 * prev_comp
+                + 0.20 * comp_base
+                + 0.10 * float(rec_price)
+                + np.random.normal(0, 0.015 * p_info['base_price'])
+            )
+            competitor_price = round(max(1, competitor_price), 2)
+
             # ГЕНЕРАЦИЯ НОВОГО СПРОСА (Симуляция Спринта 4)
             # Учитываем эластичность к нашей цене и разницу с конкурентом
             dev = rec_price - p_info['base_price']
-            comp_dev = rec_price - last['competitor_price']
+            comp_dev = rec_price - competitor_price
             
-            noise = np.random.normal(0, 5) # Случайный шум рынка
+            noise_scale = max(2.0, 0.08 * p_info['base_sales'])
+            noise = np.random.normal(0, noise_scale) # Масштабируем шум относительно спроса
             
             # Формула: Базовый спрос - (эластичность * отклонение от базы) - (влияние конкурента)
             new_sales = max(0, round(p_info['base_sales'] - p_info['elasticity']*dev - 0.5*p_info['elasticity']*comp_dev + noise))
@@ -132,7 +175,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str) -> pd.DataFrame:
                 'product_id': p_info['id'],
                 'product': prod,
                 'our_price': rec_price,
-                'competitor_price': last['competitor_price'], # Предполагаем, что конкурент не меняет цену в базе
+                'competitor_price': competitor_price,
                 'sales': new_sales,
                 'revenue': round(new_sales * rec_price, 2)
             })

@@ -16,6 +16,7 @@ from model.pricing import (
     apply_rules,
     fit_regression,
     forecast,
+    forecast_from_regression,
     simulate,
 )
 
@@ -51,7 +52,27 @@ def load_data(uploaded_file=None):
             return None
         df = pd.read_csv(path)
 
-    df["date"] = pd.to_datetime(df["date"])
+    required_cols = {
+        "date",
+        "product_id",
+        "product",
+        "our_price",
+        "competitor_price",
+        "sales",
+        "revenue",
+    }
+    missing = required_cols - set(df.columns)
+    if missing:
+        st.error(f"В CSV не хватает колонок: {', '.join(sorted(missing))}")
+        return None
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if df["date"].isna().any():
+        st.error("В CSV есть некорректные значения даты. Исправьте колонку `date`.")
+        return None
+
+    # Принудительная сортировка пользовательских и локальных CSV по дате.
+    df = df.sort_values(["date", "product"]).reset_index(drop=True)
     return df
 
 
@@ -451,8 +472,8 @@ elif nav == "💡 Рекомендации":
     fc_rules = forecast(selected_product, rec_price_rules, last_row["revenue"])
 
     # 2. Регрессия
-    a, b, opt_price_reg = fit_regression(prod_df, selected_product)
-    fc_reg = forecast(selected_product, opt_price_reg, last_row["revenue"])
+    a, b, opt_price_reg, is_reg_reliable = fit_regression(prod_df, selected_product)
+    fc_reg = forecast_from_regression(a, b, opt_price_reg, last_row["revenue"])
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -478,6 +499,11 @@ elif nav == "💡 Рекомендации":
             f"{fc_reg['growth_pct']:+.1f}% выручки",
         )
         st.caption(f"Формула: Revenue = P * ({a:.1f} - {b:.2f}*P)")
+        if not is_reg_reliable:
+            st.warning(
+                "Наклон регрессии не отрицательный: оценка эластичности ненадежна, "
+                "поэтому оптимальная цена может быть неточной."
+            )
 
     # Визуализация функции выручки
     st.divider()

@@ -23,7 +23,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 from model.pricing import PRODUCTS, SEED
 
 
-def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
+def generate_product_data(product: str, n_days: int, start_date: datetime) -> pd.DataFrame:
     """Генерирует данные продаж для одного товара за n_days дней."""
     # Фиксируем воспроизводимость для каждого товара
     product_hash = sum(ord(c) for c in product)
@@ -34,20 +34,34 @@ def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     elasticity = params['elasticity']
     base_sales = params['base_sales']
 
-    end_date = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_date = end_date - timedelta(days=n_days - 1)
-    dates = pd.date_range(start=start_date, end=end_date, freq='D')
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
 
     # Цены колеблются вокруг базы
     our_prices = np.round(base_price * np.random.uniform(0.9, 1.1, size=n_days), 2)
-    competitor_prices = np.round(our_prices * np.random.uniform(0.85, 1.15, size=n_days), 2)
+    competitor_base = base_price * 1.03
+    competitor_prices = np.zeros(n_days)
+    competitor_prices[0] = max(
+        1,
+        competitor_base + np.random.normal(0, 0.02 * base_price)
+    )
+    for i in range(1, n_days):
+        # Конкурент имеет свою базу, не следует механически за нашей ценой.
+        competitor_prices[i] = (
+            0.75 * competitor_prices[i - 1]
+            + 0.20 * competitor_base
+            + 0.05 * our_prices[i - 1]
+            + np.random.normal(0, 0.015 * base_price)
+        )
+    competitor_prices = np.round(np.maximum(1, competitor_prices), 2)
 
     # Формула: Учитываем разницу с базой и разницу с конкурентом
     # (our - comp) > 0 -> спрос падает
     price_diff_base = our_prices - base_price
     price_diff_comp = our_prices - competitor_prices
     
-    noise = np.random.normal(0, 5, size=n_days)
+    noise_scale = max(2.0, 0.08 * base_sales)
+    noise = np.random.normal(0, noise_scale, size=n_days)
     # Основная эластичность + влияние конкурента (вес 0.5)
     sales = np.maximum(0, np.round(
         base_sales - elasticity * price_diff_base - 0.5 * elasticity * price_diff_comp + noise
@@ -66,9 +80,9 @@ def generate_product_data(product: str, n_days: int) -> pd.DataFrame:
     })
 
 
-def generate_all_data(n_days: int) -> pd.DataFrame:
+def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
     """Объединяет данные всех товаров в один DataFrame."""
-    frames = [generate_product_data(p, n_days) for p in PRODUCTS]
+    frames = [generate_product_data(p, n_days, start_date) for p in PRODUCTS]
     return pd.concat(frames, ignore_index=True).sort_values(['date', 'product']).reset_index(drop=True)
 
 
@@ -115,11 +129,34 @@ def main() -> None:
     np.random.seed(SEED)
     n_days = 100  # Генерируем за последние 100 дней (Спринт 1: 100 дней, 5 товаров)
     
-    print(f"Генерация данных за {n_days} дней...")
-    df = generate_all_data(n_days)
-    
     base_dir = Path(__file__).parent.parent
     data_path = base_dir / 'data' / 'sales_history.csv'
+    existing_df = None
+
+    if data_path.exists():
+        existing_df = pd.read_csv(data_path)
+        existing_df['date'] = pd.to_datetime(existing_df['date'])
+        last_existing_date = existing_df['date'].max().to_pydatetime()
+        start_date = last_existing_date + timedelta(days=1)
+        print(
+            f"Найден существующий файл. Догенерация на {n_days} дней, "
+            f"начиная с {start_date.date()} (только будущие даты)."
+        )
+    else:
+        end_date = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_date = end_date - timedelta(days=n_days - 1)
+        print(f"Генерация стартового набора за {n_days} дней...")
+
+    new_df = generate_all_data(n_days, start_date)
+    if existing_df is not None:
+        df = pd.concat([existing_df, new_df], ignore_index=True)
+        df['date'] = pd.to_datetime(df['date'])
+        # Страховка от дублей по ключу (дата + товар)
+        df = df.sort_values(['date', 'product']).drop_duplicates(
+            subset=['date', 'product'], keep='first'
+        ).reset_index(drop=True)
+    else:
+        df = new_df
 
     save_data(df, data_path)
     plot_data(df)
