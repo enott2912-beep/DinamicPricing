@@ -19,6 +19,7 @@ from model.pricing import (
     forecast_from_regression,
     simulate,
 )
+from generator.generate_data import main as run_data_generation
 
 # ==========================================
 # КОНФИГУРАЦИЯ СТРАНИЦЫ
@@ -106,13 +107,25 @@ _MONTHS_RU = (
 def _init_overview_session(product_key: str, available_dates: set) -> None:
     """Инициализирует состояние календаря при смене товара или первом запуске."""
     min_d, max_d = min(available_dates), max(available_dates)
+    
+    # Если продукт изменился, запоминаем новый ключ
     if st.session_state.get("ov_product_key") != product_key:
         st.session_state.ov_product_key = product_key
-        st.session_state.ov_range_start = min_d
-        st.session_state.ov_range_end = max_d
-        st.session_state.ov_pending_second = False
-        st.session_state.ov_cal_year = min_d.year
-        st.session_state.ov_cal_month = min_d.month
+        # Если диапазон уже выбран, пробуем его сохранить (или подрезать под новый товар)
+        if "ov_range_start" in st.session_state and st.session_state.ov_range_start is not None:
+            # "Подрезаем" текущий выбор под границы нового товара, чтобы избежать ошибок
+            st.session_state.ov_range_start = max(min_d, min(max_d, st.session_state.ov_range_start))
+            if st.session_state.ov_range_end:
+                st.session_state.ov_range_end = max(min_d, min(max_d, st.session_state.ov_range_end))
+        else:
+            # Если выбора еще нет, ставим на весь доступный период
+            st.session_state.ov_range_start = min_d
+            st.session_state.ov_range_end = max_d
+            st.session_state.ov_pending_second = False
+
+        # Обновляем год/месяц календаря для отображения новой начальной даты
+        st.session_state.ov_cal_year = st.session_state.ov_range_start.year
+        st.session_state.ov_cal_month = st.session_state.ov_range_start.month
 
 
 def _on_overview_day_click(clicked: date) -> None:
@@ -379,6 +392,19 @@ st.sidebar.title("⚙️ Управление")
 uploaded_file = st.sidebar.file_uploader(
     "Загрузить свой CSV (sales_history)", type=["csv"]
 )
+
+# Новая функциональность: Генерация данных из UI
+st.sidebar.markdown("---")
+st.sidebar.write("Нет своих данных?")
+if st.sidebar.button("✨ Сгенерировать историю", help="Создаст синтетический файл sales_history за 100 дней"):
+    with st.spinner("Генерация данных..."):
+        run_data_generation()
+        # Очищаем кэш и перезагружаем страницу
+        st.cache_data.clear()
+        st.sidebar.success("История сгенерирована!")
+        st.rerun()
+
+st.sidebar.markdown("---")
 
 df = load_data(uploaded_file)
 
