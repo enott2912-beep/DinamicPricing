@@ -353,16 +353,77 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str) -> None:
         ax.legend()
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
     elif kind == "Столбчатая диаграмма":
-        x = np.arange(len(prod_df))
-        w = 0.35
-        ax.bar(x - w / 2, p1, width=w, label="Наша цена", alpha=1.0)
-        ax.bar(x + w / 2, p2, width=w, label="Конкурент", alpha=0.8)
+        n = len(prod_df)
+        
+        # Если данных больше 30, агрегируем по периодам
+        if n > 30:
+            # Копируем DataFrame, чтобы не менять исходный
+            df_copy = prod_df.copy()
+            df_copy['date'] = pd.to_datetime(df_copy['date'])
+            
+            # Определяем период агрегации
+            days_range = (df_copy['date'].max() - df_copy['date'].min()).days
+            if days_range <= 60:
+                # Меньше 2 месяцев — группируем по 3 дня
+                freq = '3D'
+                freq_name = "по 3 дня"
+                label_fmt = '%m-%d'
+            elif days_range <= 180:
+                # Меньше полугода — по неделям
+                freq = 'W'
+                freq_name = "по неделям"
+                label_fmt = '%m-%d'
+            else:
+                # Больше полугода — по месяцам
+                freq = 'ME'
+                freq_name = "по месяцам"
+                label_fmt = '%Y-%m'
+            
+            # Агрегируем: берем среднюю цену за период
+            df_agg = df_copy.groupby(pd.Grouper(key='date', freq=freq)).agg({
+                'our_price': 'mean',
+                'competitor_price': 'mean'
+            }).dropna()
+            
+            if len(df_agg) == 0:
+                ax.text(0.5, 0.5, "Недостаточно данных", ha="center", va="center", transform=ax.transAxes)
+                return
+            
+            x = np.arange(len(df_agg))
+            p1_agg = df_agg['our_price'].values
+            p2_agg = df_agg['competitor_price'].values
+            date_labels = [d.strftime(label_fmt) for d in df_agg.index]
+            
+            ax.bar(x - 0.2, p1_agg, width=0.4, label="Наша цена (средняя)", alpha=0.8)
+            ax.bar(x + 0.2, p2_agg, width=0.4, label="Конкурент (средний)", alpha=0.8)
+            
+            # Добавляем подпись об агрегации с человеко-читаемым текстом
+            ax.set_title(f"Средние цены (сгруппировано {freq_name})", fontsize=9)
+            
+        else:
+            # Данных мало — показываем все столбцы
+            x = np.arange(n)
+            w = 0.35
+            ax.bar(x - w/2, p1, width=w, label="Наша цена", alpha=0.8)
+            ax.bar(x + w/2, p2, width=w, label="Конкурент", alpha=0.8)
+            date_labels = [pd.Timestamp(ti).strftime("%m-%d") for ti in t]
+        
+        # Настройка подписей оси X
         ax.set_xticks(x)
-        ax.set_xticklabels(
-            [pd.Timestamp(ti).strftime("%m-%d") for ti in t], rotation=45, ha="right"
-        )
+        
+        # Если меток всё ещё много, прореживаем
+        if len(date_labels) > 15:
+            step = max(1, len(date_labels) // 12)
+            visible_labels = [date_labels[i] if i % step == 0 else "" for i in range(len(date_labels))]
+            ax.set_xticklabels(visible_labels, rotation=45, ha="right", fontsize=8)
+            ax.set_xticks(list(range(0, len(date_labels), step)))
+        else:
+            ax.set_xticklabels(date_labels, rotation=45, ha="right", fontsize=9)
+        
         ax.set_ylabel("Цена (₽)")
         ax.legend()
+        ax.grid(axis='y', alpha=0.3)
+        plt.setp(ax.xaxis.get_majorticklabels(), ha="right")
     elif kind == "Гистограмма":
         ax.hist(
             p1,
@@ -502,7 +563,10 @@ elif nav == "💡 Рекомендации":
         )
 
     last_row = prod_df.iloc[-1]
-    avg7 = prod_df["sales"].tail(7).mean()
+    # Для эвристики берем среднее по предыдущим дням (без текущего),
+    # иначе условие "падение спроса" срабатывает заметно реже.
+    prev_sales = prod_df["sales"].iloc[:-1]
+    avg7 = prev_sales.tail(7).mean() if len(prev_sales) > 0 else last_row["sales"]
 
     # 1. Эвристика
     rec_price_rules, rule_name = apply_rules(last_row, avg7)
@@ -635,16 +699,24 @@ elif nav == "🔮 Симуляция":
 
         # Сводные показатели
         avg_hist = hist_rev.mean()
-        avg_sim = sim_rev[sim_rev.index > df["date"].max()].mean()
-        delta = (avg_sim - avg_hist) / avg_hist * 100 if avg_hist else 0.0
+        # Важно: границу берем от конца выбранного периода, а не от всего CSV.
+        future_sim = sim_rev[sim_rev.index > max_period_date]
+        avg_sim = future_sim.mean()
+        delta = (avg_sim - avg_hist) / avg_hist * 100 if avg_hist and not np.isnan(avg_sim) else 0.0
 
         m1, m2 = st.columns(2)
-        m1.metric(
-            f"Ожидаемая выручка/день",
-            f"{avg_sim:,.0f} ₽",
-            f"{delta:+.1f}%",
-            help="Среднее значение выручки за период симуляции в сравнении с историческим средним."
-        )
+        if future_sim.empty or np.isnan(avg_sim):
+            m1.warning(
+                "Не удалось вычислить ожидаемую выручку: в симуляции нет корректных будущих точек "
+                "относительно выбранного периода."
+            )
+        else:
+            m1.metric(
+                f"Ожидаемая выручка/день",
+                f"{avg_sim:,.0f} ₽",
+                f"{delta:+.1f}%",
+                help="Среднее значение выручки за период симуляции в сравнении с историческим средним."
+            )
         
         st.subheader("📋 Детализация прогноза (последние шаги)")
         st.dataframe(simulated_df.tail(10), use_container_width=True)

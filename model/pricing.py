@@ -32,22 +32,39 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
     Возвращает:
         tuple (рекомендованная_цена, название_правила).
     """
-    price = row['our_price']
+    price = float(row['our_price'])
+    comp_price = float(row['competitor_price'])
+    sales = float(row['sales'])
     
     # ПРАВИЛО 0: Строгое соответствие ТЗ Спринта 2 (если продаж совсем не было)
-    if row['sales'] == 0:
+    if sales == 0:
         return round(price - 1.0, 2), "zero_sales_strict"
 
     # ПРАВИЛО 1: Реакция на конкурента (Спринт 2)
     # Если конкурент значительно дешевле (на 10% и более), снижаем цену на 5%
-    if row['competitor_price'] < price * 0.90:
+    if comp_price < price * 0.90:
         return round(price * 0.95, 2), "competitor_undercut"
     
     # ПРАВИЛО 2: Реакция на падение спроса (Спринт 2)
     # Если продажи за вчера на 20% ниже скользящего среднего, пробуем стимулировать спрос
-    if row['sales'] < avg_sales_7d * 0.80:
+    if sales < avg_sales_7d * 0.80:
         return round(price - 1.0, 2), "low_sales"
-    
+
+    # ПРАВИЛО 3: Умеренная реакция на разрыв с конкурентом (более чувствительное)
+    if comp_price < price * 0.97:
+        return round(max(1, price * 0.98), 2), "competitor_gap_soft"
+
+    # ПРАВИЛО 4: Если мы заметно дешевле конкурента и спрос не проседает, можно слегка поднять цену
+    if comp_price > price * 1.07 and sales >= avg_sales_7d * 0.95:
+        return round(price * 1.015, 2), "margin_recovery"
+
+    # ПРАВИЛО 5: Сглаживание — маленький шаг к цене конкурента, чтобы не зависать на hold
+    midpoint = (price + comp_price) / 2
+    if midpoint > price * 1.01:
+        return round(price * 1.005, 2), "drift_up"
+    if midpoint < price * 0.99:
+        return round(max(1, price * 0.995), 2), "drift_down"
+
     return price, "hold"
 
 
