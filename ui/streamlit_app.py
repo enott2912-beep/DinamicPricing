@@ -21,6 +21,10 @@ from model.pricing import (
 )
 from generator.generate_data import main as run_data_generation
 
+BASE_DIR = Path(__file__).parent.parent
+DATA_DIR = BASE_DIR / "data"
+PREDICT_PATH = DATA_DIR / "predict_sales.csv"
+
 # ==========================================
 # КОНФИГУРАЦИЯ СТРАНИЦЫ
 # ==========================================
@@ -76,6 +80,46 @@ def load_data(uploaded_file=None):
     # Принудительная сортировка пользовательских и локальных CSV по дате.
     df = df.sort_values(["date", "product"]).reset_index(drop=True)
     return df
+
+
+def clear_predict_file(columns: list[str] | None = None) -> None:
+    """Очищает файл прогнозов (predict_sales.csv)."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    cols = columns or [
+        "date",
+        "product_id",
+        "product",
+        "our_price",
+        "competitor_price",
+        "sales",
+        "revenue",
+    ]
+    pd.DataFrame(columns=cols).to_csv(PREDICT_PATH, index=False)
+    st.cache_data.clear()
+
+
+def save_predict_file(df: pd.DataFrame) -> None:
+    """Сохраняет прогнозные строки отдельно от истории."""
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    out = df.copy()
+    if "date" in out.columns:
+        out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+    out.to_csv(PREDICT_PATH, index=False)
+    st.cache_data.clear()
+
+
+@st.cache_data
+def load_predict_data() -> pd.DataFrame | None:
+    """Загружает прогнозы из отдельного файла predict_sales.csv."""
+    if not PREDICT_PATH.exists():
+        return None
+    pred_df = pd.read_csv(PREDICT_PATH)
+    if pred_df.empty:
+        return pred_df
+    if "date" in pred_df.columns:
+        pred_df["date"] = pd.to_datetime(pred_df["date"], errors="coerce")
+        pred_df = pred_df[pred_df["date"].notna()].copy()
+    return pred_df.sort_values(["date", "product"]).reset_index(drop=True)
 
 
 CHART_LABELS = [
@@ -141,6 +185,8 @@ def _on_overview_day_click(clicked: date) -> None:
         st.session_state.ov_range_start = clicked
         st.session_state.ov_range_end = None
         st.session_state.ov_pending_second = True
+    # При смене периода прогноз очищается.
+    clear_predict_file()
 
 
 def _nav_overview_month(delta: int) -> None:
@@ -244,6 +290,7 @@ def render_overview_date_calendar(available_dates: set) -> None:
             st.session_state.ov_range_start = min_d
             st.session_state.ov_range_end = max_d
             st.session_state.ov_pending_second = False
+            clear_predict_file()
             st.rerun()
     with b2:
         st.caption(f"В данных: **{min_d}** — **{max_d}**")
@@ -457,17 +504,31 @@ uploaded_file = st.sidebar.file_uploader(
 # Новая функциональность: Генерация данных из UI
 st.sidebar.markdown("---")
 st.sidebar.write("Нет своих данных?")
-if st.sidebar.button("✨ Сгенерировать историю", help="Создаст синтетический файл sales_history за 100 дней"):
+n_generate_days = st.sidebar.number_input(
+    "Дней для генерации истории",
+    min_value=7,
+    max_value=365,
+    value=100,
+    step=1,
+    help="100 дней x 5 товаров = 500 строк в sales_history.csv",
+)
+if st.sidebar.button("✨ Сгенерировать историю", help="Полностью перезапишет файл sales_history.csv"):
     with st.spinner("Генерация данных..."):
-        run_data_generation()
+        run_data_generation(int(n_generate_days))
         # Очищаем кэш и перезагружаем страницу
         st.cache_data.clear()
+        clear_predict_file()
         st.sidebar.success("История сгенерирована!")
         st.rerun()
 
 st.sidebar.markdown("---")
 
 df = load_data(uploaded_file)
+
+# Первый вход в приложение в рамках сессии: очищаем прогнозный файл.
+if "predict_initialized" not in st.session_state:
+    clear_predict_file(columns=list(df.columns) if df is not None else None)
+    st.session_state.predict_initialized = True
 
 if df is None:
     st.warning(
@@ -477,6 +538,7 @@ if df is None:
         from generator.generate_data import main as gen_main
 
         gen_main()
+        clear_predict_file()
         st.rerun()
     st.stop()
 
@@ -677,18 +739,22 @@ elif nav == "🔮 Симуляция":
             hist_rev = prod_df_period[prod_df_period["product"] == sim_scope].groupby("date")["revenue"].sum()
             sim_rev = simulated_df[simulated_df["product"] == sim_scope].groupby("date")["revenue"].sum()
             title_suffix = f"по товару '{sim_scope}'"
+        max_period_date = prod_df_period["date"].max()
+        future_sim = sim_rev[sim_rev.index > max_period_date]
+        predict_rows = simulated_df[simulated_df["date"] > max_period_date].copy()
+        save_predict_file(predict_rows)
 
         fig, ax = plt.subplots(figsize=(12, 5))
         ax.plot(hist_rev.index, hist_rev.values, label="Выбранная история", color="blue", linewidth=1.5)
-        ax.plot(
-            sim_rev.index[len(hist_rev) - 1 :],
-            sim_rev.values[len(hist_rev) - 1 :],
-            label=f"Прогноз ({method})",
-            color="green",
-            ls="--",
-            linewidth=2
-        )
-        max_period_date = prod_df_period["date"].max()
+        if not future_sim.empty:
+            ax.plot(
+                future_sim.index,
+                future_sim.values,
+                label=f"Прогноз ({method})",
+                color="green",
+                ls="--",
+                linewidth=2
+            )
         ax.axvline(max_period_date, color="black", alpha=0.3, linestyle=':')
         ax.set_ylabel(f"Выручка {title_suffix} (₽)")
         ax.set_title(f"Сценарный прогноз на {n_steps} дней (от {max_period_date.date()})")
@@ -699,17 +765,19 @@ elif nav == "🔮 Симуляция":
 
         # Сводные показатели
         avg_hist = hist_rev.mean()
-        # Важно: границу берем от конца выбранного периода, а не от всего CSV.
-        future_sim = sim_rev[sim_rev.index > max_period_date]
         avg_sim = future_sim.mean()
         delta = (avg_sim - avg_hist) / avg_hist * 100 if avg_hist and not np.isnan(avg_sim) else 0.0
+        first_day_rev = float(future_sim.iloc[0]) if not future_sim.empty else np.nan
+        last_day_rev = float(future_sim.iloc[-1]) if not future_sim.empty else np.nan
 
-        m1, m2 = st.columns(2)
+        m1, m2, m3 = st.columns(3)
         if future_sim.empty or np.isnan(avg_sim):
             m1.warning(
                 "Не удалось вычислить ожидаемую выручку: в симуляции нет корректных будущих точек "
                 "относительно выбранного периода."
             )
+            m2.metric("Ожидаемая выручка (1-й день)", "—")
+            m3.metric("Ожидаемая выручка (последний день)", "—")
         else:
             m1.metric(
                 f"Ожидаемая выручка/день",
@@ -717,7 +785,47 @@ elif nav == "🔮 Симуляция":
                 f"{delta:+.1f}%",
                 help="Среднее значение выручки за период симуляции в сравнении с историческим средним."
             )
+            m2.metric(
+                "Ожидаемая выручка (1-й день)",
+                f"{first_day_rev:,.0f} ₽",
+            )
+            m3.metric(
+                "Ожидаемая выручка (последний день)",
+                f"{last_day_rev:,.0f} ₽",
+            )
         
-        st.subheader("📋 Детализация прогноза (последние шаги)")
-        st.dataframe(simulated_df.tail(10), use_container_width=True)
+        st.subheader("📋 Детализация прогноза (из predict_sales.csv)")
+        pred_df = load_predict_data()
+        if pred_df is None or pred_df.empty:
+            st.info("Файл predict_sales.csv пока пуст. Запустите симуляцию, чтобы увидеть прогнозные строки.")
+        else:
+            if sim_scope != "Все товары":
+                pred_df = pred_df[pred_df["product"] == sim_scope].copy()
+
+            if pred_df.empty:
+                st.info("В predict_sales.csv нет строк для выбранной области симуляции.")
+            else:
+                pred_min = pred_df["date"].min().date()
+                pred_max = pred_df["date"].max().date()
+                d1, d2 = st.columns(2)
+                p_start = d1.date_input(
+                    "Период прогноза: начало",
+                    value=pred_min,
+                    min_value=pred_min,
+                    max_value=pred_max,
+                    key="predict_start_date",
+                )
+                p_end = d2.date_input(
+                    "Период прогноза: конец",
+                    value=pred_max,
+                    min_value=pred_min,
+                    max_value=pred_max,
+                    key="predict_end_date",
+                )
+                if p_end < p_start:
+                    p_start, p_end = p_end, p_start
+
+                mask = (pred_df["date"].dt.date >= p_start) & (pred_df["date"].dt.date <= p_end)
+                pred_filtered = pred_df[mask].copy()
+                st.dataframe(pred_filtered, use_container_width=True)
 

@@ -124,41 +124,24 @@ def plot_data(df: pd.DataFrame) -> None:
     print(f"Графики сохранены в {plots_dir}")
 
 
-def main() -> None:
+def main(n_days: int = 100) -> None:
     """Точка входа."""
     np.random.seed(SEED)
-    n_days = 100  # Генерируем за последние 100 дней (Спринт 1: 100 дней, 5 товаров)
+    n_days = int(max(1, n_days))
     
     base_dir = Path(__file__).parent.parent
     data_path = base_dir / 'data' / 'sales_history.csv'
-    existing_df = None
+    predict_path = base_dir / 'data' / 'predict_sales.csv'
 
-    if data_path.exists():
-        existing_df = pd.read_csv(data_path)
-        existing_df['date'] = pd.to_datetime(existing_df['date'])
-        last_existing_date = existing_df['date'].max().to_pydatetime()
-        start_date = last_existing_date + timedelta(days=1)
-        print(
-            f"Найден существующий файл. Догенерация на {n_days} дней, "
-            f"начиная с {start_date.date()} (только будущие даты)."
-        )
-    else:
-        end_date = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
-        start_date = end_date - timedelta(days=n_days - 1)
-        print(f"Генерация стартового набора за {n_days} дней...")
-
-    new_df = generate_all_data(n_days, start_date)
-    if existing_df is not None:
-        df = pd.concat([existing_df, new_df], ignore_index=True)
-        df['date'] = pd.to_datetime(df['date'])
-        # Страховка от дублей по ключу (дата + товар)
-        df = df.sort_values(['date', 'product']).drop_duplicates(
-            subset=['date', 'product'], keep='first'
-        ).reset_index(drop=True)
-    else:
-        df = new_df
+    # Каждый запуск генератора полностью перезаписывает историю.
+    end_date = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = end_date - timedelta(days=n_days - 1)
+    print(f"Полная перегенерация истории за {n_days} дней...")
+    df = generate_all_data(n_days, start_date)
 
     save_data(df, data_path)
+    # Прогнозы должны храниться отдельно и очищаться при новой генерации истории.
+    pd.DataFrame(columns=df.columns).to_csv(predict_path, index=False)
     plot_data(df)
     
     print("\nПример данных:")
