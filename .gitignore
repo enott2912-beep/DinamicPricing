@@ -8,10 +8,12 @@ env/
 venv/
 .venv/
 
-# Data
-data/sales_history.csv
-data/recommendations.csv
+# Data and Results
+data/*.csv
 data/plots/
+*.csv
+predict*
+!requirements.txt
 
 # IDEs
 .vscode/
