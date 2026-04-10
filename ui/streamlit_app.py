@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from pandas.errors import EmptyDataError
 
 # Добавляем корень проекта в sys.path для импортов
 sys.path.append(str(Path(__file__).parent.parent))
@@ -49,14 +50,17 @@ st.markdown(
 # ЗАГРУЗКА ДАННЫХ
 # ==========================================
 @st.cache_data
-def load_data(uploaded_file=None):
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
-    else:
-        path = Path(__file__).parent.parent / "data" / "sales_history.csv"
-        if not path.exists():
-            return None
-        df = pd.read_csv(path)
+def load_data(uploaded_file=None, use_uploaded: bool = False):
+    try:
+        if use_uploaded and uploaded_file is not None:
+            df = pd.read_csv(uploaded_file)
+        else:
+            path = DATA_DIR / "sales_history.csv"
+            if not path.exists():
+                return None
+            df = pd.read_csv(path)
+    except EmptyDataError:
+        return None
 
     required_cols = {
         "date",
@@ -99,12 +103,34 @@ def clear_predict_file(columns: list[str] | None = None) -> None:
 
 
 def save_predict_file(df: pd.DataFrame) -> None:
-    """Сохраняет прогнозные строки отдельно от истории."""
+    """Добавляет прогнозные строки в отдельный файл predict_sales.csv."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out = df.copy()
+    if out.empty:
+        return
     if "date" in out.columns:
-        out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
-    out.to_csv(PREDICT_PATH, index=False)
+        out["date"] = pd.to_datetime(out["date"], errors="coerce")
+        out = out[out["date"].notna()].copy()
+    if out.empty:
+        return
+    out = out.sort_values(["date", "product"]).reset_index(drop=True)
+
+    if PREDICT_PATH.exists():
+        try:
+            old = pd.read_csv(PREDICT_PATH)
+        except EmptyDataError:
+            old = pd.DataFrame(columns=out.columns)
+    else:
+        old = pd.DataFrame(columns=out.columns)
+
+    if not old.empty and "date" in old.columns:
+        old["date"] = pd.to_datetime(old["date"], errors="coerce")
+        old = old[old["date"].notna()].copy()
+
+    combined = pd.concat([old, out], ignore_index=True)
+    combined = combined.sort_values(["date", "product"]).reset_index(drop=True)
+    combined["date"] = pd.to_datetime(combined["date"]).dt.strftime("%Y-%m-%d")
+    combined.to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()
 
 
@@ -185,8 +211,6 @@ def _on_overview_day_click(clicked: date) -> None:
         st.session_state.ov_range_start = clicked
         st.session_state.ov_range_end = None
         st.session_state.ov_pending_second = True
-    # При смене периода прогноз очищается.
-    clear_predict_file()
 
 
 def _nav_overview_month(delta: int) -> None:
@@ -290,7 +314,6 @@ def render_overview_date_calendar(available_dates: set) -> None:
             st.session_state.ov_range_start = min_d
             st.session_state.ov_range_end = max_d
             st.session_state.ov_pending_second = False
-            clear_predict_file()
             st.rerun()
     with b2:
         st.caption(f"В данных: **{min_d}** — **{max_d}**")
@@ -500,6 +523,15 @@ st.sidebar.title("⚙️ Управление")
 uploaded_file = st.sidebar.file_uploader(
     "Загрузить свой CSV (sales_history)", type=["csv"]
 )
+use_uploaded_data = False
+if uploaded_file is not None:
+    source_mode = st.sidebar.radio(
+        "Источник данных для построения",
+        ["Сгенерированные данные", "Свой CSV"],
+        index=1,
+        help="Выберите, на каком наборе строить графики и расчеты.",
+    )
+    use_uploaded_data = source_mode == "Свой CSV"
 
 # Новая функциональность: Генерация данных из UI
 st.sidebar.markdown("---")
@@ -523,12 +555,7 @@ if st.sidebar.button("✨ Сгенерировать историю", help="По
 
 st.sidebar.markdown("---")
 
-df = load_data(uploaded_file)
-
-# Первый вход в приложение в рамках сессии: очищаем прогнозный файл.
-if "predict_initialized" not in st.session_state:
-    clear_predict_file(columns=list(df.columns) if df is not None else None)
-    st.session_state.predict_initialized = True
+df = load_data(uploaded_file, use_uploaded=use_uploaded_data)
 
 if df is None:
     st.warning(
@@ -807,23 +834,18 @@ elif nav == "🔮 Симуляция":
             else:
                 pred_min = pred_df["date"].min().date()
                 pred_max = pred_df["date"].max().date()
-                d1, d2 = st.columns(2)
-                p_start = d1.date_input(
-                    "Период прогноза: начало",
-                    value=pred_min,
+                picked = st.date_input(
+                    "Период данных прогноза",
+                    value=(pred_min, pred_max),
                     min_value=pred_min,
                     max_value=pred_max,
-                    key="predict_start_date",
+                    key="predict_period_range",
+                    help="Выберите начальную и конечную даты для фильтрации predict_sales.csv",
                 )
-                p_end = d2.date_input(
-                    "Период прогноза: конец",
-                    value=pred_max,
-                    min_value=pred_min,
-                    max_value=pred_max,
-                    key="predict_end_date",
-                )
-                if p_end < p_start:
-                    p_start, p_end = p_end, p_start
+                if isinstance(picked, tuple) and len(picked) == 2:
+                    p_start, p_end = picked
+                else:
+                    p_start, p_end = pred_min, pred_max
 
                 mask = (pred_df["date"].dt.date >= p_start) & (pred_df["date"].dt.date <= p_end)
                 pred_filtered = pred_df[mask].copy()
