@@ -66,41 +66,53 @@ st.markdown(
         border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 15px;
         border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
     }
-    div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    div[data-testid="stMetric"] label {
         color: var(--text-color) !important;
+        opacity: 0.8;
+    }
+    div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: var(--text-color) !important;
+        font-weight: 700;
     }
     
     /* Стили для приветственной страницы */
     .welcome-card {
         background-color: var(--secondary-background-color);
+        color: var(--text-color);
         padding: 1.5rem;
         border-radius: 12px;
-        border: 1px solid var(--primary-color);
+        border: 1px solid rgba(128, 128, 128, 0.2);
         margin-bottom: 1.5rem;
     }
     .welcome-header {
-        background: linear-gradient(120deg, var(--primary-color) 0%, #8fd3f4 100%);
-        padding: 1rem;
+        background: linear-gradient(120deg, #1c83e1 0%, #8fd3f4 100%);
+        padding: 1.2rem;
         border-radius: 10px;
         text-align: center;
         margin-bottom: 1.5rem;
-        color: white;
+        color: white !important; /* Белый текст на синем градиенте всегда читаем */
+    }
+    .welcome-header h3 {
+        color: white !important;
+        margin: 0;
     }
     .welcome-step {
         padding: 12px;
         margin: 12px 0;
         background-color: var(--background-color);
         border-radius: 8px;
-        border-left: 4px solid var(--primary-color);
+        border-left: 4px solid #1c83e1;
         color: var(--text-color);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
     code.theme-code {
-        background-color: rgba(128, 128, 128, 0.2);
-        color: var(--primary-color);
+        background-color: var(--secondary-background-color);
+        color: #ff4b4b; /* Яркий акцент для кода */
         padding: 2px 5px;
         border-radius: 4px;
+        font-weight: 600;
     }
     </style>
     """,
