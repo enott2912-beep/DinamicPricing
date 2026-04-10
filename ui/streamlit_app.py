@@ -60,11 +60,47 @@ st.set_page_config(page_title="Dynamic Pricing MVP", page_icon="💰", layout="w
 st.markdown(
     """
     <style>
+    /* Адаптивный стиль для метрик */
     div[data-testid="stMetric"] {
-        background-color: rgba(28, 131, 225, 0.05);
+        background-color: var(--secondary-background-color);
         border: 1px solid rgba(128, 128, 128, 0.2);
         padding: 15px;
         border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+        color: var(--text-color) !important;
+    }
+    
+    /* Стили для приветственной страницы */
+    .welcome-card {
+        background-color: var(--secondary-background-color);
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 1px solid var(--primary-color);
+        margin-bottom: 1.5rem;
+    }
+    .welcome-header {
+        background: linear-gradient(120deg, var(--primary-color) 0%, #8fd3f4 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        text-align: center;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+    .welcome-step {
+        padding: 12px;
+        margin: 12px 0;
+        background-color: var(--background-color);
+        border-radius: 8px;
+        border-left: 4px solid var(--primary-color);
+        color: var(--text-color);
+    }
+    code.theme-code {
+        background-color: rgba(128, 128, 128, 0.2);
+        color: var(--primary-color);
+        padding: 2px 5px;
+        border-radius: 4px;
     }
     </style>
     """,
@@ -778,61 +814,29 @@ df = load_data(uploaded_file, use_uploaded=use_uploaded_data)
 
 if df is None:
     st.markdown("""
-    <style>
-        .gradient-header {
-            background: linear-gradient(120deg, #84fab0 0%, #8fd3f4 100%);
-            padding: 1.5rem;
-            border-radius: 10px;
-            text-align: center;
-            margin-bottom: 1.5rem;
-        }
-        .description {
-            background: #e3f2fd;
-            padding: 1rem;
-            border-radius: 10px;
-            border-right: 4px solid #2196f3;
-            margin-bottom: 1rem;
-            line-height: 1.6;
-        }
-        .steps {
-            background: #f5f5f5;
-            padding: 1rem;
-            border-radius: 10px;
-        }
-        .step {
-            padding: 10px;
-            margin: 10px 0;
-            background: white;
-            border-radius: 8px;
-            border-left: 3px solid #4caf50;
-        }
-    </style>
-    
-    <div class="gradient-header">
-        <h3 style="margin:0; color:#1a1a2e;">🎯 Добро пожаловать</h3>
+    <div class="welcome-header">
+        <h3 style="margin:0;">🎯 Добро пожаловать</h3>
     </div>
     
-    <div class="description">
+    <div class="welcome-card">
         Это учебный прототип <strong>динамического ценообразования</strong>: 
-        вы загружаете свой файл CSV формата или генерируете историю продаж, 
-        смотрите аналитику по ценам и спросу, получаете рекомендации и запускаете 
-        симуляцию будущей выручки.
+        вы загружаете свой файл CSV или генерируете историю продаж, 
+        изучаете аналитику и запускаете симуляции выручки.
     </div>
     
-    <div class="steps">
+    <div class="welcome-card">
         <strong>📌 Как начать:</strong>
-        <div class="step">
-            <strong>Способ 1:</strong> Загрузите свой CSV с колонками<br>
-            <code style="background:#f0f0f0; padding:2px 5px;">date, product_id, product, our_price, competitor_price, sales, revenue</code>
+        <div class="welcome-step">
+            <strong>Способ 1:</strong> Загрузите свой CSV с колонками:<br>
+            <code class="theme-code">date, product_id, product, our_price, competitor_price, sales, revenue</code>
         </div>
-        <div class="step">
-            <strong>Способ 2:</strong> Нажмите <strong>«Сгенерировать историю»</strong> — будет создан файл 
-            <code>sales_history.csv</code> за указанное количество дней (диапазон: от даты (сегодня минус введенное пользователем число дней) до текущей даты)
+        <div class="welcome-step">
+            <strong>Способ 2:</strong> Настройте параметры в боковой панели и нажмите <strong>«Сгенерировать историю»</strong>.
         </div>
     </div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-    st.info("💡 Пока нет файла `data/sales_history.csv`, основные разделы недоступны.")
+    st.info("💡 Основные разделы станут доступны после загрузки или генерации данных.")
     st.stop()
 
 st.sidebar.divider()
