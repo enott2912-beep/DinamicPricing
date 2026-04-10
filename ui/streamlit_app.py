@@ -1,3 +1,4 @@
+import atexit
 import sys
 import calendar
 from datetime import date
@@ -25,6 +26,31 @@ from generator.generate_data import main as run_data_generation
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 PREDICT_PATH = DATA_DIR / "predict_sales.csv"
+SALES_HISTORY_PATH = DATA_DIR / "sales_history.csv"
+
+
+def _cleanup_data_files_on_exit() -> None:
+    """Удаляет локальные CSV при завершении процесса Streamlit (выход из сервера / закрытие терминала)."""
+    try:
+        if SALES_HISTORY_PATH.exists():
+            SALES_HISTORY_PATH.unlink()
+        if PREDICT_PATH.exists():
+            PREDICT_PATH.unlink()
+    except OSError:
+        pass
+
+
+atexit.register(_cleanup_data_files_on_exit)
+
+
+def _df_fingerprint(df: pd.DataFrame) -> tuple:
+    """Компактная сигнатура набора данных для инвалидации прогноза."""
+    if df is None or len(df) == 0:
+        return (0,)
+    sub = df[["date", "product", "sales", "revenue", "our_price"]].copy()
+    h = int(pd.util.hash_pandas_object(sub, index=True).sum())
+    return (len(df), str(df["date"].min()), str(df["date"].max()), h)
+
 
 # ==========================================
 # КОНФИГУРАЦИЯ СТРАНИЦЫ
@@ -103,7 +129,7 @@ def clear_predict_file(columns: list[str] | None = None) -> None:
 
 
 def save_predict_file(df: pd.DataFrame) -> None:
-    """Добавляет прогнозные строки в отдельный файл predict_sales.csv."""
+    """Полностью перезаписывает predict_sales.csv текущим прогнозом (без слияния со старыми строками)."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     out = df.copy()
     if out.empty:
@@ -114,23 +140,8 @@ def save_predict_file(df: pd.DataFrame) -> None:
     if out.empty:
         return
     out = out.sort_values(["date", "product"]).reset_index(drop=True)
-
-    if PREDICT_PATH.exists():
-        try:
-            old = pd.read_csv(PREDICT_PATH)
-        except EmptyDataError:
-            old = pd.DataFrame(columns=out.columns)
-    else:
-        old = pd.DataFrame(columns=out.columns)
-
-    if not old.empty and "date" in old.columns:
-        old["date"] = pd.to_datetime(old["date"], errors="coerce")
-        old = old[old["date"].notna()].copy()
-
-    combined = pd.concat([old, out], ignore_index=True)
-    combined = combined.sort_values(["date", "product"]).reset_index(drop=True)
-    combined["date"] = pd.to_datetime(combined["date"]).dt.strftime("%Y-%m-%d")
-    combined.to_csv(PREDICT_PATH, index=False)
+    out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+    out.to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()
 
 
@@ -353,6 +364,213 @@ def get_product_df_with_period(df: pd.DataFrame, product: str) -> tuple[pd.DataF
     return prod_df_raw, prod_df_period
 
 
+def _init_predict_calendar_session(scope_key: str, available_dates: set) -> None:
+    """Календарь фильтрации строк прогноза (только даты, которые есть в predict_sales)."""
+    if not available_dates:
+        return
+    min_d, max_d = min(available_dates), max(available_dates)
+    dates_sig = (min_d, max_d, len(available_dates))
+    if (
+        st.session_state.get("pd_scope_key") != scope_key
+        or st.session_state.get("pd_dates_sig") != dates_sig
+    ):
+        st.session_state.pd_scope_key = scope_key
+        st.session_state.pd_dates_sig = dates_sig
+        st.session_state.pd_range_start = min_d
+        st.session_state.pd_range_end = max_d
+        st.session_state.pd_pending_second = False
+        st.session_state.pd_cal_year = min_d.year
+        st.session_state.pd_cal_month = min_d.month
+
+
+def _on_predict_day_click(clicked: date) -> None:
+    if st.session_state.get("pd_pending_second"):
+        a, b = st.session_state.pd_range_start, clicked
+        if b < a:
+            a, b = b, a
+        st.session_state.pd_range_start = a
+        st.session_state.pd_range_end = b
+        st.session_state.pd_pending_second = False
+    else:
+        st.session_state.pd_range_start = clicked
+        st.session_state.pd_range_end = None
+        st.session_state.pd_pending_second = True
+
+
+def _nav_predict_month(delta: int) -> None:
+    y, m = st.session_state.pd_cal_year, st.session_state.pd_cal_month
+    m += delta
+    while m < 1:
+        m += 12
+        y -= 1
+    while m > 12:
+        m -= 12
+        y += 1
+    st.session_state.pd_cal_year = y
+    st.session_state.pd_cal_month = m
+
+
+def render_predict_period_calendar(available_dates: set, scope_key: str) -> None:
+    """Календарь-кнопки для выбора периода отображения прогноза (как на вкладке Обзор)."""
+    min_d, max_d = min(available_dates), max(available_dates)
+    _init_predict_calendar_session(scope_key, available_dates)
+    y, m = st.session_state.pd_cal_year, st.session_state.pd_cal_month
+    rs = st.session_state.get("pd_range_start")
+    re = st.session_state.get("pd_range_end")
+    pending = st.session_state.get("pd_pending_second", False)
+    range_end = max_d if (pending and re is None) else re
+    st.caption(
+        "Выберите **начало** и **конец** периода кликами по датам (доступны только дни из прогноза)."
+    )
+    if pending and re is None and rs is not None:
+        st.info(f"Начало периода: **{rs}**. Кликните конечную дату.")
+
+    nav1, nav2, nav3 = st.columns([1, 4, 1])
+    with nav1:
+        if st.button("◀", key="pd_cal_prev", help="Предыдущий месяц"):
+            _nav_predict_month(-1)
+            st.rerun()
+    with nav2:
+        st.markdown(
+            f"<div style='text-align:center'><b>{_MONTHS_RU[m]} {y}</b></div>",
+            unsafe_allow_html=True,
+        )
+    with nav3:
+        if st.button("▶", key="pd_cal_next", help="Следующий месяц"):
+            _nav_predict_month(1)
+            st.rerun()
+
+    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    header = st.columns(7)
+    for i, w in enumerate(weekdays):
+        header[i].markdown(
+            f"<div style='text-align:center;font-size:0.85em'>{w}</div>",
+            unsafe_allow_html=True,
+        )
+
+    first_weekday, days_in_month = calendar.monthrange(y, m)
+    grid = []
+    row = [None] * first_weekday
+    for d in range(1, days_in_month + 1):
+        day_date = date(y, m, d)
+        row.append(day_date)
+        if len(row) == 7:
+            grid.append(row)
+            row = []
+    if row:
+        while len(row) < 7:
+            row.append(None)
+        grid.append(row)
+
+    for cal_row in grid:
+        cols = st.columns(7)
+        for col, day_date in zip(cols, cal_row):
+            if day_date is None:
+                col.empty()
+                continue
+            in_data = day_date in available_dates
+            if not in_data:
+                col.markdown(
+                    f"<div style='text-align:center;color:#ccc;padding:6px'>{day_date.day}</div>",
+                    unsafe_allow_html=True,
+                )
+                continue
+            label = str(day_date.day)
+            is_in_range = (
+                rs is not None
+                and range_end is not None
+                and rs <= day_date <= range_end
+            )
+            col.button(
+                label,
+                key=f"pdday_{day_date.isoformat()}",
+                on_click=_on_predict_day_click,
+                args=(day_date,),
+                type="primary" if is_in_range else "secondary",
+                use_container_width=True,
+            )
+
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("Сбросить на весь период прогноза", key="pd_reset_range"):
+            st.session_state.pd_range_start = min_d
+            st.session_state.pd_range_end = max_d
+            st.session_state.pd_pending_second = False
+            st.rerun()
+    with b2:
+        st.caption(f"В прогнозе: **{min_d}** — **{max_d}**")
+
+
+def apply_predict_period_filter(pred_df: pd.DataFrame) -> pd.DataFrame:
+    rs = st.session_state.get("pd_range_start")
+    re = st.session_state.get("pd_range_end")
+    pending = st.session_state.get("pd_pending_second", False)
+    if len(pred_df) == 0:
+        return pred_df
+    dcol = pred_df["date"].dt.date
+    if pending and re is None and rs is not None:
+        return pred_df[dcol >= rs].copy()
+    if rs is not None and re is not None:
+        return pred_df[(dcol >= rs) & (dcol <= re)].copy()
+    return pred_df.copy()
+
+
+def _render_stored_simulation(sim_last: dict) -> None:
+    """Показывает график и метрики последней успешной симуляции (вне блока кнопки)."""
+    hist_rev = sim_last["hist_rev"]
+    future_sim = sim_last["future_sim"]
+    max_period_date = sim_last["max_period_date"]
+    title_suffix = sim_last["title_suffix"]
+    n_steps = sim_last["n_steps"]
+    method = sim_last["method"]
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    ax.plot(hist_rev.index, hist_rev.values, label="Выбранная история", color="blue", linewidth=1.5)
+    if not future_sim.empty:
+        ax.plot(
+            future_sim.index,
+            future_sim.values,
+            label=f"Прогноз ({method})",
+            color="green",
+            ls="--",
+            linewidth=2,
+        )
+    ax.axvline(max_period_date, color="black", alpha=0.3, linestyle=":")
+    ax.set_ylabel(f"Выручка {title_suffix} (₽)")
+    ax.set_title(
+        f"Сценарный прогноз на {n_steps} дней (от {pd.Timestamp(max_period_date).date()})"
+    )
+    ax.legend()
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+    plt.close(fig)
+
+    avg_hist = sim_last["avg_hist"]
+    avg_sim = sim_last["avg_sim"]
+    delta = sim_last["delta"]
+    first_day_rev = sim_last["first_day_rev"]
+    last_day_rev = sim_last["last_day_rev"]
+    future_empty = sim_last["future_empty"]
+
+    m1, m2, m3 = st.columns(3)
+    if future_empty or (avg_sim is not None and np.isnan(avg_sim)):
+        m1.warning(
+            "Не удалось вычислить ожидаемую выручку: в симуляции нет корректных будущих точек "
+            "относительно выбранного периода."
+        )
+        m2.metric("Ожидаемая выручка (1-й день)", "—")
+        m3.metric("Ожидаемая выручка (последний день)", "—")
+    else:
+        m1.metric(
+            "Ожидаемая выручка/день",
+            f"{avg_sim:,.0f} ₽",
+            f"{delta:+.1f}%",
+            help="Среднее значение выручки за период симуляции в сравнении с историческим средним.",
+        )
+        m2.metric("Ожидаемая выручка (1-й день)", f"{first_day_rev:,.0f} ₽")
+        m3.metric("Ожидаемая выручка (последний день)", f"{last_day_rev:,.0f} ₽")
+
+
 def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str) -> None:
     """График «цена — продажи» в зависимости от типа."""
     x = prod_df["our_price"].values
@@ -542,7 +760,8 @@ n_generate_days = st.sidebar.number_input(
     max_value=365,
     value=100,
     step=1,
-    help="100 дней x 5 товаров = 500 строк в sales_history.csv",
+    help="История строится от сегодняшней даты назад на выбранное число дней "
+    "(в CSV попадут N дней × число товаров). Полностью перезаписывает sales_history.csv.",
 )
 if st.sidebar.button("✨ Сгенерировать историю", help="Полностью перезапишет файл sales_history.csv"):
     with st.spinner("Генерация данных..."):
@@ -558,15 +777,62 @@ st.sidebar.markdown("---")
 df = load_data(uploaded_file, use_uploaded=use_uploaded_data)
 
 if df is None:
-    st.warning(
-        "⚠️ Данные не найдены. Похоже, `data/sales_history.csv` отсутствует и файл не загружен."
-    )
-    if st.button("Сгенерировать демо-данные"):
-        from generator.generate_data import main as gen_main
+    st.markdown("""
+    <style>
+        .gradient-header {
+            background: linear-gradient(120deg, #84fab0 0%, #8fd3f4 100%);
+            padding: 1.5rem;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .description {
+            background: #e3f2fd;
+            padding: 1rem;
+            border-radius: 10px;
+            border-right: 4px solid #2196f3;
+            margin-bottom: 1rem;
+            line-height: 1.6;
+        }
+        .steps {
+            background: #f5f5f5;
+            padding: 1rem;
+            border-radius: 10px;
+        }
+        .step {
+            padding: 10px;
+            margin: 10px 0;
+            background: white;
+            border-radius: 8px;
+            border-left: 3px solid #4caf50;
+        }
+    </style>
+    
+    <div class="gradient-header">
+        <h3 style="margin:0; color:#1a1a2e;">🎯 Добро пожаловать</h3>
+    </div>
+    
+    <div class="description">
+        Это учебный прототип <strong>динамического ценообразования</strong>: 
+        вы загружаете свой файл CSV формата или генерируете историю продаж, 
+        смотрите аналитику по ценам и спросу, получаете рекомендации и запускаете 
+        симуляцию будущей выручки.
+    </div>
+    
+    <div class="steps">
+        <strong>📌 Как начать:</strong>
+        <div class="step">
+            <strong>Способ 1:</strong> Загрузите свой CSV с колонками<br>
+            <code style="background:#f0f0f0; padding:2px 5px;">date, product_id, product, our_price, competitor_price, sales, revenue</code>
+        </div>
+        <div class="step">
+            <strong>Способ 2:</strong> Нажмите <strong>«Сгенерировать историю»</strong> — будет создан файл 
+            <code>sales_history.csv</code> за указанное количество дней (диапазон: от даты (сегодня минус введенное пользователем число дней) до текущей даты)
+        </div>
+    </div>
+""", unsafe_allow_html=True)
 
-        gen_main()
-        clear_predict_file()
-        st.rerun()
+    st.info("💡 Пока нет файла `data/sales_history.csv`, основные разделы недоступны.")
     st.stop()
 
 st.sidebar.divider()
@@ -578,6 +844,21 @@ nav = st.sidebar.radio(
     "Раздел",
     ["📊 Обзор", "💡 Рекомендации", "🔮 Симуляция"],
 )
+
+# Смена товара, периода календаря или набора данных — сбрасываем прогноз и сохранённую симуляцию
+_, _ = get_product_df_with_period(df, selected_product)
+_forecast_ctx = (
+    _df_fingerprint(df),
+    use_uploaded_data,
+    selected_product,
+    str(st.session_state.get("ov_range_start")) if st.session_state.get("ov_range_start") else None,
+    str(st.session_state.get("ov_range_end")) if st.session_state.get("ov_range_end") else None,
+    bool(st.session_state.get("ov_pending_second")),
+)
+if st.session_state.get("_forecast_context") != _forecast_ctx:
+    st.session_state._forecast_context = _forecast_ctx
+    clear_predict_file()
+    st.session_state.pop("sim_last", None)
 
 # ==========================================
 # ОСНОВНОЙ КОНТЕНТ
@@ -732,99 +1013,100 @@ elif nav == "🔮 Симуляция":
     re = st.session_state.get("ov_range_end")
     if rs:
         period_text = f"**{rs}** — **{re if re else '...'}**"
-        st.info(f"💡 Модели будут обучаться на историческом периоде: {period_text}. "
-                "Вы можете изменить его в календаре на вкладке '📊 Обзор'.")
-    
+        st.info(
+            f"💡 Модели будут обучаться на историческом периоде: {period_text}. "
+            "Вы можете изменить его в календаре на вкладке '📊 Обзор'."
+        )
+
     col1, col2, col3 = st.columns(3)
-    
+
     sim_scope_options = ["Все товары"] + sorted(list(df["product"].unique()))
     sim_scope = col1.selectbox("Область симуляции", sim_scope_options)
-    
+
     n_steps = col2.slider("Горизонт симуляции (дней)", 7, 30, 14)
     method = col3.selectbox("Метод принятия решений", ["regression", "rules"])
 
     if st.button("Запустить симуляцию", type="primary"):
-        # Подготовка данных периода (Знания для модели)
         _, prod_df_period = get_product_df_with_period(df, sim_scope)
-        
+
         if len(prod_df_period) < 2:
-            st.error("⛔ Слишком короткий период для обучения. Выберите диапазон пошире в календаре.")
+            st.error(
+                "⛔ Слишком короткий период для обучения. Выберите диапазон пошире в календаре."
+            )
             st.stop()
 
         with st.spinner("Рынок просчитывается..."):
-            # Вызов ядра симуляции
             simulated_df = simulate(prod_df_period, n_steps, method, target_product=sim_scope)
 
-        st.success(f"✅ Симуляция завершена!")
-
-        # Визуализация результатов (используем только выбранный период истории)
         if sim_scope == "Все товары":
             hist_rev = prod_df_period.groupby("date")["revenue"].sum()
             sim_rev = simulated_df.groupby("date")["revenue"].sum()
             title_suffix = "по всем товарам"
         else:
-            hist_rev = prod_df_period[prod_df_period["product"] == sim_scope].groupby("date")["revenue"].sum()
-            sim_rev = simulated_df[simulated_df["product"] == sim_scope].groupby("date")["revenue"].sum()
+            hist_rev = prod_df_period[prod_df_period["product"] == sim_scope].groupby("date")[
+                "revenue"
+            ].sum()
+            sim_rev = simulated_df[simulated_df["product"] == sim_scope].groupby("date")[
+                "revenue"
+            ].sum()
             title_suffix = f"по товару '{sim_scope}'"
         max_period_date = prod_df_period["date"].max()
         future_sim = sim_rev[sim_rev.index > max_period_date]
         predict_rows = simulated_df[simulated_df["date"] > max_period_date].copy()
         save_predict_file(predict_rows)
 
-        fig, ax = plt.subplots(figsize=(12, 5))
-        ax.plot(hist_rev.index, hist_rev.values, label="Выбранная история", color="blue", linewidth=1.5)
-        if not future_sim.empty:
-            ax.plot(
-                future_sim.index,
-                future_sim.values,
-                label=f"Прогноз ({method})",
-                color="green",
-                ls="--",
-                linewidth=2
-            )
-        ax.axvline(max_period_date, color="black", alpha=0.3, linestyle=':')
-        ax.set_ylabel(f"Выручка {title_suffix} (₽)")
-        ax.set_title(f"Сценарный прогноз на {n_steps} дней (от {max_period_date.date()})")
-        ax.legend()
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-        plt.close(fig)
+        avg_hist = float(hist_rev.mean()) if len(hist_rev) else float("nan")
+        avg_sim = float(future_sim.mean()) if not future_sim.empty else float("nan")
+        delta = (
+            (avg_sim - avg_hist) / avg_hist * 100
+            if avg_hist and not np.isnan(avg_sim) and avg_hist != 0
+            else 0.0
+        )
+        first_day_rev = float(future_sim.iloc[0]) if not future_sim.empty else float("nan")
+        last_day_rev = float(future_sim.iloc[-1]) if not future_sim.empty else float("nan")
 
-        # Сводные показатели
-        avg_hist = hist_rev.mean()
-        avg_sim = future_sim.mean()
-        delta = (avg_sim - avg_hist) / avg_hist * 100 if avg_hist and not np.isnan(avg_sim) else 0.0
-        first_day_rev = float(future_sim.iloc[0]) if not future_sim.empty else np.nan
-        last_day_rev = float(future_sim.iloc[-1]) if not future_sim.empty else np.nan
+        st.session_state["sim_last"] = {
+            "sim_scope": sim_scope,
+            "n_steps": n_steps,
+            "method": method,
+            "hist_rev": hist_rev,
+            "future_sim": future_sim,
+            "max_period_date": max_period_date,
+            "title_suffix": title_suffix,
+            "avg_hist": avg_hist,
+            "avg_sim": avg_sim,
+            "delta": delta,
+            "first_day_rev": first_day_rev,
+            "last_day_rev": last_day_rev,
+            "future_empty": future_sim.empty,
+        }
+        st.session_state["sim_show_success"] = True
+        st.rerun()
 
-        m1, m2, m3 = st.columns(3)
-        if future_sim.empty or np.isnan(avg_sim):
-            m1.warning(
-                "Не удалось вычислить ожидаемую выручку: в симуляции нет корректных будущих точек "
-                "относительно выбранного периода."
-            )
-            m2.metric("Ожидаемая выручка (1-й день)", "—")
-            m3.metric("Ожидаемая выручка (последний день)", "—")
-        else:
-            m1.metric(
-                f"Ожидаемая выручка/день",
-                f"{avg_sim:,.0f} ₽",
-                f"{delta:+.1f}%",
-                help="Среднее значение выручки за период симуляции в сравнении с историческим средним."
-            )
-            m2.metric(
-                "Ожидаемая выручка (1-й день)",
-                f"{first_day_rev:,.0f} ₽",
-            )
-            m3.metric(
-                "Ожидаемая выручка (последний день)",
-                f"{last_day_rev:,.0f} ₽",
-            )
-        
+    sl = st.session_state.get("sim_last")
+    params_match = (
+        sl is not None
+        and sl["sim_scope"] == sim_scope
+        and sl["n_steps"] == n_steps
+        and sl["method"] == method
+    )
+    if sl and not params_match:
+        st.caption(
+            "Параметры симуляции изменились относительно последнего запуска — "
+            "нажмите «Запустить симуляцию», чтобы обновить график и таблицу."
+        )
+
+    if params_match:
+        if st.session_state.pop("sim_show_success", False):
+            st.success("✅ Симуляция завершена!")
+        _render_stored_simulation(sl)
+
         st.subheader("📋 Детализация прогноза (из predict_sales.csv)")
         pred_df = load_predict_data()
         if pred_df is None or pred_df.empty:
-            st.info("Файл predict_sales.csv пока пуст. Запустите симуляцию, чтобы увидеть прогнозные строки.")
+            st.info(
+                "Файл predict_sales.csv пока пуст. Запустите симуляцию, чтобы увидеть прогнозные строки."
+            )
         else:
             if sim_scope != "Все товары":
                 pred_df = pred_df[pred_df["product"] == sim_scope].copy()
@@ -832,22 +1114,20 @@ elif nav == "🔮 Симуляция":
             if pred_df.empty:
                 st.info("В predict_sales.csv нет строк для выбранной области симуляции.")
             else:
-                pred_min = pred_df["date"].min().date()
-                pred_max = pred_df["date"].max().date()
-                picked = st.date_input(
-                    "Период данных прогноза",
-                    value=(pred_min, pred_max),
-                    min_value=pred_min,
-                    max_value=pred_max,
-                    key="predict_period_range",
-                    help="Выберите начальную и конечную даты для фильтрации predict_sales.csv",
-                )
-                if isinstance(picked, tuple) and len(picked) == 2:
-                    p_start, p_end = picked
-                else:
-                    p_start, p_end = pred_min, pred_max
+                scope_key = f"{sim_scope}|{sl['n_steps']}|{sl['method']}"
+                with st.expander("📅 Период отображения прогноза (календарь)", expanded=True):
+                    render_predict_period_calendar(
+                        set(pred_df["date"].dt.date), scope_key=scope_key
+                    )
+                    prs = st.session_state.get("pd_range_start")
+                    pre = st.session_state.get("pd_range_end")
+                    if pre is not None:
+                        st.success(f"Выбран период таблицы: **{prs}** — **{pre}**")
+                    elif st.session_state.get("pd_pending_second"):
+                        st.caption(
+                            f"Показаны строки с **{prs}** до последней даты прогноза "
+                            "(ожидается второй клик для конца периода)."
+                        )
 
-                mask = (pred_df["date"].dt.date >= p_start) & (pred_df["date"].dt.date <= p_end)
-                pred_filtered = pred_df[mask].copy()
+                pred_filtered = apply_predict_period_filter(pred_df)
                 st.dataframe(pred_filtered, use_container_width=True)
-
