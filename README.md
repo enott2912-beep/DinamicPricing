@@ -5,15 +5,21 @@
 ## 📁 Структура проекта
 
 ```text
-Reteil/
+DinamicPricing/
 ├── model/
-│   └── pricing.py         # ЦЕНТРАЛЬНОЕ ЯДРО (Бизнес-логика и математика)
+│   └── pricing.py         # Бизнес-логика ценообразования и симуляции
 ├── generator/
-│   └── generate_data.py   # ГЕНЕРАТОР (Имитация 100 дней рынка)
+│   └── generate_data.py   # Генерация синтетической истории продаж
 ├── ui/
-│   └── streamlit_app.py   # ИНТЕРФЕЙС (Streamlit Dashboard)
-├── data/                  # Хранилище (CSV и отчеты)
-│   └── sales_history.csv
+│   ├── streamlit_app.py   # Точка входа Streamlit (launcher)
+│   ├── app_entry.py       # Основная сборка приложения (sidebar + маршрутизация)
+│   ├── views.py           # Вкладки: Обзор / Рекомендации / Симуляция
+│   ├── charts.py          # Построение графиков и метрик симуляции
+│   ├── calendars.py       # Календари и фильтрация периодов
+│   └── data_manager.py    # Загрузка/сохранение CSV и валидация данных
+├── data/                  # Хранилище локальных CSV
+│   ├── sales_history.csv
+│   └── predict_sales.csv
 ├── requirements.txt       # Зависимости проекта
 └── README.md              # Документация
 ```
