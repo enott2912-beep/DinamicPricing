@@ -22,10 +22,51 @@ def configure_page() -> None:
         <style>
         div[data-testid="stMetric"] { background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); padding: 15px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: var(--text-color) !important; }
-        .welcome-card { background-color: var(--secondary-background-color); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--primary-color); margin-bottom: 1.5rem; }
-        .welcome-header { background: linear-gradient(120deg, var(--primary-color) 0%, #8fd3f4 100%); padding: 1rem; border-radius: 10px; text-align: center; margin-bottom: 1.5rem; color: white; }
-        .welcome-step { padding: 12px; margin: 12px 0; background-color: var(--background-color); border-radius: 8px; border-left: 4px solid var(--primary-color); color: var(--text-color); }
-        code.theme-code { background-color: rgba(128, 128, 128, 0.2); color: var(--primary-color); padding: 2px 5px; border-radius: 4px; }
+
+        .welcome-card {
+            background-color: var(--secondary-background-color);
+            color: var(--text-color);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid rgba(128, 128, 128, 0.35);
+            margin-bottom: 1.5rem;
+        }
+        .welcome-card * {
+            color: var(--text-color) !important;
+        }
+
+        .welcome-header {
+            /* Фиксированный контрастный градиент, чтобы текст был читаем в любой теме */
+            background: linear-gradient(120deg, #1f4ea8 0%, #2b6fcf 100%);
+            padding: 1rem;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 1.5rem;
+            color: #ffffff !important;
+        }
+        .welcome-header * {
+            color: #ffffff !important;
+        }
+
+        .welcome-step {
+            padding: 12px;
+            margin: 12px 0;
+            background-color: var(--background-color);
+            border-radius: 8px;
+            border-left: 4px solid var(--primary-color);
+            color: var(--text-color);
+        }
+        .welcome-step * {
+            color: var(--text-color) !important;
+        }
+
+        code.theme-code {
+            background-color: rgba(128, 128, 128, 0.2);
+            color: var(--text-color) !important;
+            border: 1px solid rgba(128, 128, 128, 0.35);
+            padding: 2px 5px;
+            border-radius: 4px;
+        }
         </style>
         """,
         unsafe_allow_html=True,
