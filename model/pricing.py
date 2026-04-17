@@ -139,6 +139,22 @@ def forecast_from_regression(a: float, b: float, recommended_price: float, curre
     }
 
 
+def predict_competitor_price(prev_comp_price: float, product_base_price: float, our_prev_price: float) -> float:
+    """
+    Рассчитывает ожидаемую цену конкурента на следующий период (шаг).
+    Конкурент стремится к своей базовой цене, имеет инерцию (prev_comp_price) 
+    и частично реагирует на нашу цену (our_prev_price).
+    """
+    comp_base = float(product_base_price * 1.03)
+    competitor_price = (
+        0.75 * float(prev_comp_price)
+        + 0.20 * comp_base
+        + 0.05 * float(our_prev_price)
+        + np.random.normal(0, 0.015 * float(product_base_price))
+    )
+    return round(max(1.0, competitor_price), 2)
+
+
 # ############################################################################
 # 4. МОДУЛЬ СИМУЛЯЦИИ (TIME-ROLL FORWARD)
 # ############################################################################
@@ -207,15 +223,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
                 rec_price = prices_map.get(prod, last['our_price'])
             
             # Конкурент тоже движется: возврат к своей базе + реакция на нашу цену + шум
-            prev_comp = float(last['competitor_price'])
-            comp_base = float(p_info['base_price'] * 1.03)
-            competitor_price = (
-                0.70 * prev_comp
-                + 0.20 * comp_base
-                + 0.10 * float(rec_price)
-                + np.random.normal(0, 0.015 * p_info['base_price'])
-            )
-            competitor_price = round(max(1, competitor_price), 2)
+            competitor_price = predict_competitor_price(last['competitor_price'], p_info['base_price'], rec_price)
 
             # ГЕНЕРАЦИЯ НОВОГО СПРОСА (Симуляция Спринта 4)
             # Учитываем эластичность к нашей цене и разницу с конкурентом

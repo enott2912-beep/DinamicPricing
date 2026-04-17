@@ -17,7 +17,7 @@ import numpy as np
 
 # Импорты из центральной модели
 sys.path.append(str(Path(__file__).parent.parent))
-from model.pricing import PRODUCTS, SEED
+from model.pricing import PRODUCTS, SEED, predict_competitor_price
 
 
 def generate_product_data(product: str, n_days: int, start_date: datetime) -> pd.DataFrame:
@@ -44,11 +44,8 @@ def generate_product_data(product: str, n_days: int, start_date: datetime) -> pd
     )
     for i in range(1, n_days):
         # Конкурент имеет свою базу, не следует механически за нашей ценой.
-        competitor_prices[i] = (
-            0.75 * competitor_prices[i - 1]
-            + 0.20 * competitor_base
-            + 0.05 * our_prices[i - 1]
-            + np.random.normal(0, 0.015 * base_price)
+        competitor_prices[i] = predict_competitor_price(
+            competitor_prices[i - 1], base_price, our_prices[i - 1]
         )
     competitor_prices = np.round(np.maximum(1, competitor_prices), 2)
 
