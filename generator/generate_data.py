@@ -14,9 +14,6 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 # Импорты из центральной модели
 sys.path.append(str(Path(__file__).parent.parent))
@@ -93,37 +90,6 @@ def save_data(df: pd.DataFrame, path: Path) -> None:
     print(f"Данные сохранены: {path.absolute()}")
 
 
-def plot_data(df: pd.DataFrame) -> None:
-    """Строит и сохраняет графики в папку data/plots."""
-    plots_dir = Path(__file__).parent.parent / 'data' / 'plots'
-    plots_dir.mkdir(parents=True, exist_ok=True)
-
-    # Scatter: Наша цена vs Продажи
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for product in df['product'].unique():
-        sub = df[df['product'] == product]
-        ax.scatter(sub['our_price'], sub['sales'], label=product, alpha=0.7)
-    ax.set(title='Зависимость продаж от цены (с учетом демпфирования конкурентов)', 
-           xlabel='Цена (₽)', ylabel='Продажи (шт)')
-    ax.legend()
-    ax.grid(True, linestyle='--', alpha=0.6)
-    fig.savefig(plots_dir / 'price_vs_sales_scatter.png', bbox_inches='tight')
-    plt.close(fig)
-
-    # Линейный: Выручка по дням
-    fig2, ax2 = plt.subplots(figsize=(10, 6))
-    revenue_daily = df.groupby('date')['revenue'].sum()
-    ax2.plot(revenue_daily.index, revenue_daily.values, color='green', marker='o', linestyle='-', alpha=0.8)
-    ax2.set(title='Общая ежедневная выручка (все товары)', 
-            xlabel='Дата', ylabel='Выручка (₽)')
-    ax2.grid(True, linestyle='--', alpha=0.6)
-    plt.xticks(rotation=45)
-    fig2.savefig(plots_dir / 'daily_revenue_line.png', bbox_inches='tight')
-    plt.close(fig2)
-
-    print(f"Графики сохранены в {plots_dir}")
-
-
 def main(n_days: int = 100) -> None:
     """Точка входа."""
     np.random.seed(SEED)
@@ -142,7 +108,6 @@ def main(n_days: int = 100) -> None:
     save_data(df, data_path)
     # Прогнозы должны храниться отдельно и очищаться при новой генерации истории.
     pd.DataFrame(columns=df.columns).to_csv(predict_path, index=False)
-    plot_data(df)
     
     print("\nПример данных:")
     print(df.head())
