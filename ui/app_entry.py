@@ -300,4 +300,4 @@ def main() -> None:
     elif nav == "💡 Рекомендации":
         render_recommendations_tab(df, selected_product)
     elif nav == "🔮 Симуляция":
-        render_simulation_tab(df)
+        render_simulation_tab(df, selected_product)

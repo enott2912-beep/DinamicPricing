@@ -369,8 +369,11 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     )
 
 
-def render_simulation_tab(df: pd.DataFrame) -> None:
+def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
     st.title("🔮 Симуляция будущего")
+    st.caption(
+        f"Товар для прогноза: **{selected_product}** — выбирается только в боковой панели «Выберите товар»."
+    )
     rs = st.session_state.get("ov_range_start")
     re = st.session_state.get("ov_range_end")
     if rs:
@@ -380,29 +383,33 @@ def render_simulation_tab(df: pd.DataFrame) -> None:
             "Вы можете изменить его в календаре на вкладке '📊 Обзор'."
         )
 
-    col1, col2, col3 = st.columns(3)
-    sim_scope_options = ["Все товары"] + sorted(list(df["product"].unique()))
-    sim_scope = col1.selectbox("Область симуляции", sim_scope_options)
-    n_steps = col2.slider("Горизонт симуляции (дней)", 7, 30, 14)
-    method = col3.selectbox("Метод принятия решений", ["regression", "rules"])
+    col1, col2 = st.columns(2)
+    n_steps = col1.slider("Горизонт симуляции (дней)", 7, 30, 14)
+    method = col2.selectbox("Метод принятия решений", ["regression", "rules"])
 
     if st.button("Запустить симуляцию", type="primary"):
-        _, prod_df_period = get_product_df_with_period(df, sim_scope)
+        _, prod_df_period = get_product_df_with_period(df, selected_product)
         if len(prod_df_period) < 2:
             st.error("⛔ Слишком короткий период для обучения. Выберите диапазон пошире в календаре.")
             st.stop()
 
         with st.spinner("Рынок просчитывается..."):
-            simulated_df = simulate(prod_df_period, n_steps, method, target_product=sim_scope)
+            simulated_df = simulate(
+                prod_df_period, n_steps, method, target_product=selected_product
+            )
 
-        if sim_scope == "Все товары":
+        if selected_product == "Все товары":
             hist_rev = prod_df_period.groupby("date")["revenue"].sum()
             sim_rev = simulated_df.groupby("date")["revenue"].sum()
             title_suffix = "по всем товарам"
         else:
-            hist_rev = prod_df_period[prod_df_period["product"] == sim_scope].groupby("date")["revenue"].sum()
-            sim_rev = simulated_df[simulated_df["product"] == sim_scope].groupby("date")["revenue"].sum()
-            title_suffix = f"по товару '{sim_scope}'"
+            hist_rev = prod_df_period[prod_df_period["product"] == selected_product].groupby("date")[
+                "revenue"
+            ].sum()
+            sim_rev = simulated_df[simulated_df["product"] == selected_product].groupby("date")[
+                "revenue"
+            ].sum()
+            title_suffix = f"по товару '{selected_product}'"
 
         max_period_date = prod_df_period["date"].max()
         future_sim = sim_rev[sim_rev.index > max_period_date]
@@ -420,7 +427,7 @@ def render_simulation_tab(df: pd.DataFrame) -> None:
         last_day_rev = float(future_sim.iloc[-1]) if not future_sim.empty else float("nan")
 
         st.session_state["sim_last"] = {
-            "sim_scope": sim_scope,
+            "sim_scope": selected_product,
             "n_steps": n_steps,
             "method": method,
             "hist_rev": hist_rev,
@@ -440,7 +447,7 @@ def render_simulation_tab(df: pd.DataFrame) -> None:
     sl = st.session_state.get("sim_last")
     params_match = (
         sl is not None
-        and sl["sim_scope"] == sim_scope
+        and sl["sim_scope"] == selected_product
         and sl["n_steps"] == n_steps
         and sl["method"] == method
     )
@@ -462,13 +469,13 @@ def render_simulation_tab(df: pd.DataFrame) -> None:
         st.info("Файл predict_sales.csv пока пуст. Запустите симуляцию, чтобы увидеть прогнозные строки.")
         return
 
-    if sim_scope != "Все товары":
-        pred_df = pred_df[pred_df["product"] == sim_scope].copy()
+    if selected_product != "Все товары":
+        pred_df = pred_df[pred_df["product"] == selected_product].copy()
     if pred_df.empty:
         st.info("В predict_sales.csv нет строк для выбранной области симуляции.")
         return
 
-    scope_key = f"{sim_scope}|{sl['n_steps']}|{sl['method']}"
+    scope_key = f"{selected_product}|{sl['n_steps']}|{sl['method']}"
     with st.expander("📅 Период отображения прогноза (календарь)", expanded=True):
         render_predict_period_calendar(set(pred_df["date"].dt.date), scope_key=scope_key)
         prs = st.session_state.get("pd_range_start")
