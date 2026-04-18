@@ -60,22 +60,54 @@ def render_stored_simulation(sim_last: dict) -> None:
         m3.metric("Ожидаемая выручка (последний день)", f"{last_day_rev:,.0f} ₽")
 
 
-def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str) -> None:
-    x = prod_df["our_price"].values
-    y = prod_df["sales"].values
+def _daily_price_sales_agg(prod_df: pd.DataFrame) -> pd.DataFrame:
+    tmp = prod_df.copy()
+    tmp["date"] = pd.to_datetime(tmp["date"])
+    return (
+        tmp.groupby("date", as_index=False)
+        .agg(our_price=("our_price", "mean"), sales=("sales", "sum"))
+        .sort_values("date")
+    )
+
+
+def _daily_prices_agg(prod_df: pd.DataFrame) -> pd.DataFrame:
+    tmp = prod_df.copy()
+    tmp["date"] = pd.to_datetime(tmp["date"])
+    return (
+        tmp.groupby("date", as_index=False)
+        .agg(our_price=("our_price", "mean"), competitor_price=("competitor_price", "mean"))
+        .sort_values("date")
+    )
+
+
+def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> None:
     if len(prod_df) == 0:
         ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
         return
 
+    use_daily = aggregate_daily and kind in ("Точечный", "Линейный")
+    if use_daily:
+        work = _daily_price_sales_agg(prod_df)
+        x = work["our_price"].values
+        y = work["sales"].values
+        if len(work) == 0:
+            ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
+            return
+    else:
+        x = prod_df["our_price"].values
+        y = prod_df["sales"].values
+
     if kind == "Точечный":
         ax.scatter(x, y, alpha=0.6, c="#1f77b4")
-        ax.set_xlabel("Цена (₽)")
-        ax.set_ylabel("Продажи (шт)")
+        ax.set_xlabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
+        ax.set_ylabel("Продажи (шт)" + (" — сумма по SKU за день" if use_daily else ""))
     elif kind == "Линейный":
+        # По оси X — цена: соединяем точки в порядке возрастания цены (как у одного SKU),
+        # иначе при дневной агрегации хронологический порядок даёт хаотичную «змейку».
         order = np.argsort(x)
         ax.plot(x[order], y[order], marker=".", alpha=0.8, color="#1f77b4")
-        ax.set_xlabel("Цена (₽)")
-        ax.set_ylabel("Продажи (шт)")
+        ax.set_xlabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
+        ax.set_ylabel("Продажи (шт)" + (" — сумма по SKU за день" if use_daily else ""))
     elif kind == "Столбчатая диаграмма":
         unique_prices = np.sort(prod_df["our_price"].unique())
         if len(unique_prices) > 10:
@@ -101,24 +133,45 @@ def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str) -> None:
     ax.grid(True, alpha=0.3)
 
 
-def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str) -> None:
+def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> None:
     if len(prod_df) == 0:
         ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
         return
-    t = prod_df["date"].values
-    p1 = prod_df["our_price"].values
-    p2 = prod_df["competitor_price"].values
+
+    use_daily = aggregate_daily and kind in ("Точечный", "Линейный")
+    if use_daily:
+        plot_df = _daily_prices_agg(prod_df)
+        if len(plot_df) == 0:
+            ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
+            return
+        t = plot_df["date"].values
+        p1 = plot_df["our_price"].values
+        p2 = plot_df["competitor_price"].values
+    else:
+        t = prod_df["date"].values
+        p1 = prod_df["our_price"].values
+        p2 = prod_df["competitor_price"].values
 
     if kind == "Точечный":
-        ax.scatter(t, p1, label="Наша цена", alpha=0.8, c="#1f77b4")
-        ax.scatter(t, p2, label="Цена конкурента", alpha=0.6, c="#ff7f0e", marker="s")
-        ax.set_ylabel("Цена (₽)")
+        l1, l2 = (
+            ("Наша цена (средняя по SKU за день)", "Конкурент (средняя по SKU за день)")
+            if use_daily
+            else ("Наша цена", "Цена конкурента")
+        )
+        ax.scatter(t, p1, label=l1, alpha=0.8, c="#1f77b4")
+        ax.scatter(t, p2, label=l2, alpha=0.6, c="#ff7f0e", marker="s")
+        ax.set_ylabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
         ax.legend()
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
     elif kind == "Линейный":
-        ax.plot(t, p1, label="Наша цена", marker=".", alpha=0.8)
-        ax.plot(t, p2, label="Цена конкурента", ls="--", alpha=0.6)
-        ax.set_ylabel("Цена (₽)")
+        l1, l2 = (
+            ("Наша цена (средняя по SKU за день)", "Конкурент (средняя по SKU за день)")
+            if use_daily
+            else ("Наша цена", "Цена конкурента")
+        )
+        ax.plot(t, p1, label=l1, marker=".", alpha=0.8)
+        ax.plot(t, p2, label=l2, ls="--", alpha=0.6)
+        ax.set_ylabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
         ax.legend()
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
     elif kind == "Столбчатая диаграмма":

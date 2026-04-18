@@ -21,33 +21,217 @@ from ui.charts import (
 from ui.data_manager import load_predict_data, save_predict_file
 
 
+def _render_welcome_demo_charts() -> None:
+    """Иллюстративные графики без загрузки данных (синтетика)."""
+    rng = np.random.default_rng(42)
+    n = 42
+    t = np.linspace(0, 3.3, n)
+    price = 70 + 16 * np.sin(t) + rng.normal(0, 2.0, n)
+    sales = np.clip(620 - 5.5 * price + rng.normal(0, 32, n), 35, None)
+    comp = price * 1.03 + rng.normal(0, 2.2, n)
+    dates = pd.date_range(periods=n, freq="D", end=pd.Timestamp("2026-03-15"))
+
+    demo_face = "#f0f4fb"
+    demo_grid = "#d8e0ef"
+
+    fig1, ax1 = plt.subplots(figsize=(5.2, 3.1))
+    ax1.set_facecolor(demo_face)
+    fig1.patch.set_facecolor("#fafbfd")
+    ax1.scatter(price, sales, alpha=0.72, c="#2b6fcf", edgecolors="white", linewidths=0.35, s=52, zorder=3)
+    order = np.argsort(price)
+    ax1.plot(price[order], sales[order], color="#153a7a", alpha=0.42, lw=1.35, zorder=2)
+    ax1.set_xlabel("Наша цена (₽)", fontsize=9)
+    ax1.set_ylabel("Продажи (шт)", fontsize=9)
+    ax1.set_title("Обзор: цена и спрос", fontsize=10, fontweight="600", pad=10, color="#1a2744")
+    ax1.grid(True, alpha=0.35, color=demo_grid)
+    ax1.spines["top"].set_visible(False)
+    ax1.spines["right"].set_visible(False)
+    fig1.tight_layout()
+
+    fig2, ax2 = plt.subplots(figsize=(5.2, 3.1))
+    ax2.set_facecolor(demo_face)
+    fig2.patch.set_facecolor("#fafbfd")
+    ax2.plot(dates, price, marker=".", markersize=5, label="Наша цена", color="#2b6fcf", lw=1.2)
+    ax2.plot(dates, comp, ls="--", lw=1.1, label="Конкурент", color="#c45c12", alpha=0.88)
+    ax2.set_ylabel("Цена (₽)", fontsize=9)
+    ax2.legend(loc="upper right", fontsize=8, framealpha=0.92)
+    ax2.set_title("Динамика относительно рынка", fontsize=10, fontweight="600", pad=10, color="#1a2744")
+    ax2.grid(True, alpha=0.35, color=demo_grid)
+    ax2.spines["top"].set_visible(False)
+    ax2.spines["right"].set_visible(False)
+    fig2.autofmt_xdate()
+    fig2.tight_layout()
+
+    c_a, c_b = st.columns(2, gap="medium")
+    with c_a:
+        st.markdown(
+            """
+            <div class="welcome-demo-wrap">
+                <p class="welcome-demo-title">Пример: «цена → продажи»</p>
+                <p class="welcome-demo-desc">После загрузки данных здесь будут ваши точки; для «всех товаров»
+                графики можно сводить по дням.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.pyplot(fig1)
+    with c_b:
+        st.markdown(
+            """
+            <div class="welcome-demo-wrap">
+                <p class="welcome-demo-title">Пример: цены во времени</p>
+                <p class="welcome-demo-desc">В приложении доступен календарь периода и отдельный блок симуляции
+                прогноза выручки.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.pyplot(fig2)
+
+    plt.close(fig1)
+    plt.close(fig2)
+
+
 def render_welcome_screen() -> None:
     st.markdown(
         """
-    <div class="welcome-header">
-        <h3 style="margin:0;">🎯 Добро пожаловать</h3>
-    </div>
-
-    <div class="welcome-card">
-        Это учебный прототип <strong>динамического ценообразования</strong>:
-        вы загружаете свой файл CSV или генерируете историю продаж,
-        изучаете аналитику и запускаете симуляции выручки.
-    </div>
-
-    <div class="welcome-card">
-        <strong>📌 Как начать:</strong>
-        <div class="welcome-step">
-            <strong>Способ 1:</strong> Загрузите свой CSV с колонками:<br>
-            <code class="theme-code">date, product_id, product, our_price, competitor_price, sales, revenue</code>
+        <div class="welcome-hero">
+            <h1>Динамическое ценообразование</h1>
+            <p class="welcome-hero-sub">
+                Учебный прототип: загрузите историю продаж или сгенерируйте её одной кнопкой,
+                выберите товар или портфель целиком, затем изучайте метрики, рекомендации по цене и сценарный прогноз.
+            </p>
+            <div class="welcome-hero-badges">
+                <span class="welcome-pill">📊 Обзор и календарь периода</span>
+                <span class="welcome-pill">💡 Правила и регрессия</span>
+                <span class="welcome-pill">🔮 Симуляция выручки</span>
+                <span class="welcome-pill">📁 Свой CSV или генерация</span>
+            </div>
         </div>
-        <div class="welcome-step">
-            <strong>Способ 2:</strong> Настройте параметры в боковой панели и нажмите <strong>«Сгенерировать историю»</strong>.
-        </div>
-    </div>
-    """,
+        """,
         unsafe_allow_html=True,
     )
-    st.info("💡 Основные разделы станут доступны после загрузки или генерации данных.")
+
+    st.markdown('<p class="welcome-section-title">Возможности приложения</p>', unsafe_allow_html=True)
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        st.markdown(
+            """
+            <div class="welcome-feature-card">
+                <div class="wf-icon">📊</div>
+                <h3>Обзор продаж</h3>
+                <p>Метрики по периоду, графики «цена — спрос» и динамика относительно конкурента.
+                Удобный календарь, чтобы сузить интервал анализа.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with f2:
+        st.markdown(
+            """
+            <div class="welcome-feature-card">
+                <div class="wf-icon">💡</div>
+                <h3>Рекомендации</h3>
+                <p>Эвристики по правилам и оценка оптимальной цены через регрессию спроса;
+                сравнение сценариев роста выручки.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with f3:
+        st.markdown(
+            """
+            <div class="welcome-feature-card">
+                <div class="wf-icon">🔮</div>
+                <h3>Симуляция</h3>
+                <p>Пошаговый прогноз рынка на выбранный горизонт: по одному SKU или сразу по всем товарам,
+                с сохранением прогноза в таблицу.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<p class="welcome-section-title">Пошаговый сценарий</p>', unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="welcome-timeline-wrap">
+            <div class="welcome-timeline">
+                <div class="welcome-timeline-row">
+                    <span class="welcome-timeline-num">1</span>
+                    <div class="welcome-timeline-body">
+                        <strong>Данные</strong>
+                        <span>В боковой панели загрузите CSV с историей или нажмите «Сгенерировать историю»
+                        — файл продаж будет готов к анализу.</span>
+                    </div>
+                </div>
+                <div class="welcome-timeline-row">
+                    <span class="welcome-timeline-num">2</span>
+                    <div class="welcome-timeline-body">
+                        <strong>Товар</strong>
+                        <span>Выберите конкретный SKU или пункт «Все товары», чтобы смотреть агрегаты
+                        портфеля и общие рекомендации.</span>
+                    </div>
+                </div>
+                <div class="welcome-timeline-row">
+                    <span class="welcome-timeline-num">3</span>
+                    <div class="welcome-timeline-body">
+                        <strong>Обзор</strong>
+                        <span>Откройте вкладку «Обзор»: при необходимости уточните период в календаре,
+                        изучите графики и ключевые показатели.</span>
+                    </div>
+                </div>
+                <div class="welcome-timeline-row">
+                    <span class="welcome-timeline-num">4</span>
+                    <div class="welcome-timeline-body">
+                        <strong>Рекомендации</strong>
+                        <span>На вкладке «Рекомендации» посмотрите предложенную цену по правилам и по модели,
+                        подсказку по эластичности.</span>
+                    </div>
+                </div>
+                <div class="welcome-timeline-row">
+                    <span class="welcome-timeline-num">5</span>
+                    <div class="welcome-timeline-body">
+                        <strong>Симуляция</strong>
+                        <span>Запустите симуляцию на вкладке «Симуляция», сравните историческую и прогнозную
+                        выручку, при необходимости выгрузите детализацию из сохранённого прогноза.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<p class="welcome-section-title">Пример визуализаций</p>', unsafe_allow_html=True)
+    _render_welcome_demo_charts()
+
+    with st.expander("📎 Формат CSV и быстрый старт", expanded=False):
+        st.markdown(
+            """
+            <div class="welcome-card">
+                <div class="welcome-step">
+                    <strong>Способ 1 — свой файл:</strong> колонки
+                    <code class="theme-code">date, product_id, product, our_price, competitor_price, sales, revenue</code>
+                </div>
+                <div class="welcome-step">
+                    <strong>Способ 2 — без файла:</strong> в боковой панели задайте число дней и нажмите
+                    <strong>«Сгенерировать историю»</strong> — будет создан учебный набор продаж.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        """
+        <div class="welcome-cta">
+            <strong>Готово начать?</strong><br>
+            Загрузите данные слева или сгенерируйте историю — разделы «Обзор», «Рекомендации» и «Симуляция»
+            откроются автоматически.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
@@ -56,6 +240,11 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
     if len(prod_df_raw) == 0:
         st.warning("Нет данных по выбранному товару.")
         st.stop()
+    if selected_product == "Все товары":
+        st.caption(
+            "Метрики вверху — по всем строкам SKU. На **точечных и линейных** графиках данные "
+            "сведены **по календарным дням**: цены — среднее по SKU, продажи — сумма по SKU."
+        )
 
     available_dates = set(prod_df_raw["date"].dt.date)
     with st.expander("📅 Период анализа (календарь по датам из таблицы)", expanded=True):
@@ -80,7 +269,7 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
     st.subheader("Зависимость продаж от нашей цены")
     kind1 = st.selectbox("Тип графика", CHART_LABELS, key="ov_chart_price_sales")
     fig, ax = plt.subplots(figsize=(10, 4))
-    plot_price_vs_sales(ax, prod_df, kind1)
+    plot_price_vs_sales(ax, prod_df, kind1, aggregate_daily=(selected_product == "Все товары"))
     fig.tight_layout()
     st.pyplot(fig)
     plt.close(fig)
@@ -88,7 +277,7 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
     st.subheader("Динамика нашей цены и цены конкурента")
     kind2 = st.selectbox("Тип графика", CHART_LABELS_TIME, key="ov_chart_time")
     fig2, ax2 = plt.subplots(figsize=(10, 4))
-    plot_prices_over_time(ax2, prod_df, kind2)
+    plot_prices_over_time(ax2, prod_df, kind2, aggregate_daily=(selected_product == "Все товары"))
     fig2.tight_layout()
     st.pyplot(fig2)
     plt.close(fig2)
@@ -108,8 +297,28 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     elif st.session_state.ov_pending_second:
         st.caption(f"Период расчета рекомендаций: с **{rs}** до последней даты в таблице.")
 
-    last_row = prod_df.iloc[-1]
-    prev_sales = prod_df["sales"].iloc[:-1]
+    if selected_product == "Все товары":
+        work_df = (
+            prod_df.groupby("date", as_index=False)
+            .agg(
+                {
+                    "our_price": "mean",
+                    "competitor_price": "mean",
+                    "sales": "sum",
+                    "revenue": "sum",
+                }
+            )
+            .sort_values("date")
+        )
+        st.caption(
+            "Для «всех товаров» показатели за день: **продажи и выручка — сумма по SKU**, "
+            "**цены — среднее по SKU**."
+        )
+    else:
+        work_df = prod_df.sort_values("date")
+
+    last_row = work_df.iloc[-1]
+    prev_sales = work_df["sales"].iloc[:-1]
     avg7 = prev_sales.tail(7).mean() if len(prev_sales) > 0 else last_row["sales"]
 
     rec_price_rules, rule_name = apply_rules(last_row, avg7)

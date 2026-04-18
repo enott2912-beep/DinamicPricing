@@ -81,7 +81,10 @@ def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float,
     Возвращает:
         tuple (параметр_A, параметр_B, оптимальная_цена, флаг_надежности).
     """
-    prod_data = df[df['product'] == product]
+    if product == "Все товары":
+        prod_data = df
+    else:
+        prod_data = df[df['product'] == product]
     if len(prod_data) < 3:
         fallback = float(prod_data['our_price'].mean()) if len(prod_data) else 0.0
         return 0.0, 0.0, fallback, False
@@ -112,6 +115,22 @@ def forecast(product: str, recommended_price: float, current_revenue: float) -> 
     """
     Прогноз выручки на основе 'идеальной' эластичности из конфигурации PRODUCTS.
     """
+    if product == "Все товары":
+        n = len(PRODUCTS)
+        base_price = sum(x["base_price"] for x in PRODUCTS.values()) / n
+        base_sales = sum(x["base_sales"] for x in PRODUCTS.values()) / n
+        elasticity = sum(x["elasticity"] for x in PRODUCTS.values()) / n
+        price_dev = recommended_price - base_price
+        pred_sales = max(0, round(base_sales - elasticity * price_dev))
+        pred_revenue = pred_sales * recommended_price
+        growth_pct = (
+            ((pred_revenue - current_revenue) / current_revenue * 100) if current_revenue > 0 else 0.0
+        )
+        return {
+            "forecast_sales": pred_sales,
+            "forecast_revenue": round(pred_revenue, 2),
+            "growth_pct": round(growth_pct, 1),
+        }
     p = PRODUCTS[product]
     price_dev = recommended_price - p['base_price']
     pred_sales = max(0, round(p['base_sales'] - p['elasticity'] * price_dev))

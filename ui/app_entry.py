@@ -35,19 +35,6 @@ def configure_page() -> None:
             color: var(--text-color) !important;
         }
 
-        .welcome-header {
-            /* Фиксированный контрастный градиент, чтобы текст был читаем в любой теме */
-            background: linear-gradient(120deg, #1f4ea8 0%, #2b6fcf 100%);
-            padding: 1rem;
-            border-radius: 10px;
-            text-align: center;
-            margin-bottom: 1.5rem;
-            color: #ffffff !important;
-        }
-        .welcome-header * {
-            color: #ffffff !important;
-        }
-
         .welcome-step {
             padding: 12px;
             margin: 12px 0;
@@ -66,6 +53,172 @@ def configure_page() -> None:
             border: 1px solid rgba(128, 128, 128, 0.35);
             padding: 2px 5px;
             border-radius: 4px;
+        }
+
+        .welcome-hero {
+            background: linear-gradient(135deg, #153a7a 0%, #1f4ea8 40%, #2b6fcf 100%);
+            padding: 2rem 1.75rem 2.25rem;
+            border-radius: 16px;
+            text-align: center;
+            margin-bottom: 1.75rem;
+            box-shadow: 0 12px 40px rgba(15, 40, 90, 0.35);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .welcome-hero h1 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.85rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            color: #ffffff !important;
+        }
+        .welcome-hero .welcome-hero-sub {
+            margin: 0;
+            font-size: 1.05rem;
+            line-height: 1.55;
+            color: rgba(255, 255, 255, 0.92) !important;
+            max-width: 640px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .welcome-hero-badges {
+            margin-top: 1.25rem;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            justify-content: center;
+        }
+        .welcome-pill {
+            display: inline-block;
+            padding: 0.35rem 0.85rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.18);
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.22);
+        }
+
+        .welcome-section-title {
+            font-size: 1.15rem;
+            font-weight: 700;
+            margin: 2rem 0 1rem 0;
+            padding-bottom: 0.4rem;
+            border-bottom: 2px solid var(--primary-color);
+            color: var(--text-color);
+        }
+
+        .welcome-feature-card {
+            background: linear-gradient(180deg, var(--secondary-background-color) 0%, var(--background-color) 100%);
+            border: 1px solid rgba(128, 128, 128, 0.28);
+            border-radius: 14px;
+            padding: 1.25rem 1.1rem;
+            min-height: 168px;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .welcome-feature-card:hover {
+            border-color: rgba(43, 111, 207, 0.45);
+            box-shadow: 0 8px 28px rgba(31, 78, 168, 0.12);
+        }
+        .welcome-feature-card .wf-icon {
+            font-size: 1.75rem;
+            line-height: 1;
+            margin-bottom: 0.5rem;
+        }
+        .welcome-feature-card h3 {
+            margin: 0 0 0.45rem 0;
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--text-color) !important;
+        }
+        .welcome-feature-card p {
+            margin: 0;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: var(--text-color) !important;
+            opacity: 0.92;
+        }
+
+        .welcome-timeline-wrap {
+            background-color: var(--secondary-background-color);
+            border-radius: 14px;
+            border: 1px solid rgba(128, 128, 128, 0.28);
+            padding: 1.35rem 1.25rem 0.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+        }
+        .welcome-timeline {
+            max-width: 760px;
+            margin: 0 auto;
+        }
+        .welcome-timeline-row {
+            display: flex;
+            gap: 1rem;
+            align-items: flex-start;
+            margin-bottom: 1.15rem;
+        }
+        .welcome-timeline-num {
+            flex-shrink: 0;
+            width: 2.35rem;
+            height: 2.35rem;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1f4ea8, #2b6fcf);
+            color: #ffffff !important;
+            font-weight: 700;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 10px rgba(31, 78, 168, 0.35);
+        }
+        .welcome-timeline-body {
+            flex: 1;
+            padding-top: 0.15rem;
+        }
+        .welcome-timeline-body strong {
+            color: var(--text-color) !important;
+            font-size: 0.98rem;
+        }
+        .welcome-timeline-body span {
+            display: block;
+            margin-top: 0.25rem;
+            font-size: 0.88rem;
+            line-height: 1.45;
+            color: var(--text-color) !important;
+            opacity: 0.88;
+        }
+
+        .welcome-demo-wrap {
+            background: var(--secondary-background-color);
+            border-radius: 14px;
+            border: 1px solid rgba(128, 128, 128, 0.28);
+            padding: 1rem 1rem 0.75rem;
+            margin-bottom: 0.25rem;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+        }
+        .welcome-demo-wrap .welcome-demo-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            margin: 0 0 0.35rem 0;
+            color: var(--text-color) !important;
+        }
+        .welcome-demo-wrap .welcome-demo-desc {
+            font-size: 0.82rem;
+            margin: 0 0 0.5rem 0;
+            line-height: 1.4;
+            color: var(--text-color) !important;
+            opacity: 0.85;
+        }
+
+        .welcome-cta {
+            margin-top: 1.75rem;
+            padding: 1.1rem 1.25rem;
+            border-radius: 12px;
+            background: linear-gradient(90deg, rgba(31, 78, 168, 0.12), rgba(43, 111, 207, 0.08));
+            border: 1px dashed rgba(43, 111, 207, 0.45);
+            text-align: center;
+            font-size: 0.95rem;
+            color: var(--text-color) !important;
         }
         </style>
         """,
@@ -120,7 +273,12 @@ def main() -> None:
 
     st.sidebar.divider()
     product_list = sorted(list(df["product"].unique()))
-    selected_product = st.sidebar.selectbox("Выберите товар", product_list)
+    sidebar_products = ["Все товары"] + product_list
+    selected_product = st.sidebar.selectbox(
+        "Выберите товар",
+        sidebar_products,
+        help="«Все товары» — суммарная аналитика и агрегированные рекомендации по выбранному периоду.",
+    )
     nav = st.sidebar.radio("Раздел", ["📊 Обзор", "💡 Рекомендации", "🔮 Симуляция"])
 
     get_product_df_with_period(df, selected_product)
