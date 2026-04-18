@@ -3,7 +3,15 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from model.pricing import apply_rules, fit_regression, forecast, forecast_from_regression, simulate
+from model.pricing import (
+    apply_rules,
+    fit_regression,
+    fit_regression_aggregate_daily,
+    forecast,
+    forecast_from_regression,
+    products_in_dataframe,
+    simulate,
+)
 from ui.calendars import (
     apply_overview_date_filter,
     apply_predict_period_filter,
@@ -312,20 +320,145 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
         )
         st.caption(
             "Для «всех товаров» показатели за день: **продажи и выручка — сумма по SKU**, "
-            "**цены — среднее по SKU**."
+            "**цены — среднее по SKU**. Регрессия по цене и симуляция с методом regression "
+            "считаются **отдельно по каждому SKU** (как в симуляции); ниже — сводка и агрегированный график."
         )
     else:
         work_df = prod_df.sort_values("date")
 
     last_row = work_df.iloc[-1]
+
+    if selected_product == "Все товары":
+        sku_list = products_in_dataframe(prod_df)
+        if not sku_list:
+            st.warning("В данных нет ни одного товара из каталога.")
+            st.stop()
+
+        rule_rows = []
+        reg_rows = []
+        rec_prices_rules: list[float] = []
+        opts: list[float] = []
+        rel_flags: list[bool] = []
+        total_rev_actual = 0.0
+        total_pred_rules = 0.0
+        total_pred_reg = 0.0
+
+        for p in sku_list:
+            sub = prod_df[prod_df["product"] == p].sort_values("date")
+            last_i = sub.iloc[-1]
+            prev = sub["sales"].iloc[:-1]
+            avg7 = float(prev.tail(7).mean()) if len(prev) > 0 else float(last_i["sales"])
+            rp, rn = apply_rules(last_i, avg7)
+            fc_r = forecast(p, rp, float(last_i["revenue"]))
+            total_rev_actual += float(last_i["revenue"])
+            total_pred_rules += float(fc_r["forecast_revenue"])
+            rec_prices_rules.append(rp)
+            rule_rows.append(
+                {
+                    "Товар": p,
+                    "Цена, ₽": round(float(last_i["our_price"]), 2),
+                    "Цена (правила), ₽": rp,
+                    "Правило": rn,
+                    "Прогноз выручки, ₽": fc_r["forecast_revenue"],
+                    "Δ к факту, %": fc_r["growth_pct"],
+                }
+            )
+
+            a_i, b_i, opt_i, rel_i = fit_regression(prod_df, p)
+            fc_g = forecast_from_regression(a_i, b_i, opt_i, float(last_i["revenue"]))
+            total_pred_reg += float(fc_g["forecast_revenue"])
+            opts.append(opt_i)
+            rel_flags.append(rel_i)
+            reg_rows.append(
+                {
+                    "Товар": p,
+                    "Цена, ₽": round(float(last_i["our_price"]), 2),
+                    "Цена (регр.), ₽": opt_i,
+                    "Надёжн.": "да" if rel_i else "нет",
+                    "Прогноз выручки, ₽": fc_g["forecast_revenue"],
+                    "Δ к факту, %": fc_g["growth_pct"],
+                    "A": round(a_i, 2),
+                    "B": round(b_i, 4),
+                }
+            )
+
+        mean_rec_rules = float(np.mean(rec_prices_rules))
+        mean_opt_reg = float(np.mean(opts))
+        growth_rules_pct = (
+            (total_pred_rules - total_rev_actual) / total_rev_actual * 100 if total_rev_actual > 0 else 0.0
+        )
+        growth_reg_pct = (
+            (total_pred_reg - total_rev_actual) / total_rev_actual * 100 if total_rev_actual > 0 else 0.0
+        )
+
+        a_agg, b_agg, opt_agg, rel_agg = fit_regression_aggregate_daily(work_df)
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.subheader("Текущее состояние (день)")
+            st.metric("Средняя наша цена", f"{last_row['our_price']:.2f} ₽")
+            st.metric("Средняя цена конкурента", f"{last_row['competitor_price']:.2f} ₽")
+            st.metric("Суммарная выручка", f"{last_row['revenue']:.2f} ₽")
+        with c2:
+            st.subheader("Эвристика")
+            st.metric("Средняя цена (правила)", f"{mean_rec_rules:.2f} ₽", f"{growth_rules_pct:+.1f}% к сумме выручки")
+            st.caption("Правило считается **по каждому SKU**; прогноз — из PRODUCTS, затем сумма по товарам.")
+        with c3:
+            st.subheader("Регрессия")
+            st.metric("Средняя цена (регр.)", f"{mean_opt_reg:.2f} ₽", f"{growth_reg_pct:+.1f}% к сумме выручки")
+            st.caption("Оптимум **по каждому SKU** на своей истории; % — относительно суммы фактической выручки за день.")
+            if not all(rel_flags):
+                st.warning(
+                    "У части товаров наклон регрессии не отрицательный — для них оптимальная цена условна "
+                    "(см. колонку «Надёжн.» в таблице)."
+                )
+
+        st.divider()
+        t1, t2 = st.tabs(["Эвристика по SKU", "Регрессия по SKU"])
+        with t1:
+            st.dataframe(pd.DataFrame(rule_rows), use_container_width=True, hide_index=True)
+        with t2:
+            st.dataframe(pd.DataFrame(reg_rows), use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Агрегированная выручка vs средняя цена портфеля (по дням)")
+        st.caption(
+            "Кривая строится по дневным точкам: средняя цена — ось X, суммарные продажи — регрессия; "
+            "вершина — условный оптимум **для портфельного ряда**, не обязательно совпадает со средним "
+            "пер-товарных оптимумов из таблицы."
+        )
+        anchor = opt_agg if opt_agg > 0 else float(last_row["our_price"])
+        p_min = max(1.0, anchor * 0.5)
+        p_max = max(p_min * 1.01, anchor * 1.5)
+        prices = np.linspace(p_min, p_max, 100)
+        revenues = prices * (a_agg - b_agg * prices)
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(prices, revenues, label="Прогноз выручки (агрегат)", color="gray", alpha=0.5)
+        ax.axvline(last_row["our_price"], color="red", ls="--", label=f"Средняя сейчас ({last_row['our_price']:.2f})")
+        if rel_agg and b_agg > 0:
+            ax.axvline(opt_agg, color="green", ls="-", label=f"Оптимум агрег. ({opt_agg:.2f})")
+        ax.set_xlabel("Средняя цена портфеля (₽)")
+        ax.set_ylabel("Прогнозируемая выручка (модель по дням)")
+        ax.legend()
+        st.pyplot(fig)
+        plt.close(fig)
+
+        st.info(
+            f"👉 **Итог по портфелю**: суммарная выручка последнего дня {total_rev_actual:.2f} ₽ → "
+            f"суммарный прогноз по регрессии {total_pred_reg:.2f} ₽ (**{growth_reg_pct:+.1f}%**); "
+            f"средняя рекомендованная цена по SKU {mean_opt_reg:.2f} ₽."
+        )
+        return
+
     prev_sales = work_df["sales"].iloc[:-1]
     avg7 = prev_sales.tail(7).mean() if len(prev_sales) > 0 else last_row["sales"]
 
     rec_price_rules, rule_name = apply_rules(last_row, avg7)
-    fc_rules = forecast(selected_product, rec_price_rules, last_row["revenue"])
+    fc_rules = forecast(selected_product, rec_price_rules, float(last_row["revenue"]))
 
     a, b, opt_price_reg, is_reg_reliable = fit_regression(prod_df, selected_product)
-    fc_reg = forecast_from_regression(a, b, opt_price_reg, last_row["revenue"])
+    fc_reg = forecast_from_regression(a, b, opt_price_reg, float(last_row["revenue"]))
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -349,8 +482,9 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
 
     st.divider()
     st.subheader("Анализ эластичности выручки (Regression)")
-    p_min = max(1, opt_price_reg * 0.5)
-    p_max = opt_price_reg * 1.5
+    anchor = opt_price_reg if opt_price_reg > 0 else float(last_row["our_price"])
+    p_min = max(1.0, anchor * 0.5)
+    p_max = max(p_min * 1.01, anchor * 1.5)
     prices = np.linspace(p_min, p_max, 100)
     revenues = prices * (a - b * prices)
 
@@ -362,6 +496,7 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     ax.set_ylabel("Прогнозируемая выручка")
     ax.legend()
     st.pyplot(fig)
+    plt.close(fig)
 
     st.info(
         f"👉 **Итог по {selected_product}**: старая цена {last_row['our_price']:.2f} ₽ → "

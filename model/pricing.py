@@ -69,68 +69,78 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
 
 
 # ############################################################################
-# 3. МАТЕМАТИЧЕСКАЯ ОБТИМИЗАЦИЯ И РЕГРЕССИЯ
+# 3. МАТЕМАТИЧЕСКАЯ ОПТИМИЗАЦИЯ И РЕГРЕССИЯ
 # ############################################################################
+
+
+def _fit_linear_sales_vs_price(our_prices: np.ndarray, sales: np.ndarray, fallback_price: float) -> tuple[float, float, float, bool]:
+    """
+    Общая регрессия: Sales ≈ A - B*Price (B > 0 при надежной отрицательной эластичности).
+    Оптимум выручки Rev = P*(A-B*P): P* = A/(2B).
+    """
+    if len(our_prices) < 3:
+        return 0.0, 0.0, float(fallback_price), False
+
+    X = our_prices.reshape(-1, 1)
+    y = sales
+    model = LinearRegression().fit(X, y)
+    a = float(model.intercept_)
+    coef = float(model.coef_[0])
+    is_reliable = coef < 0
+    b = -coef if coef < 0 else 0.0
+    if b > 0:
+        optimal_price = round(a / (2 * b), 2)
+    else:
+        optimal_price = float(fallback_price)
+    return a, b, optimal_price, is_reliable
 
 
 def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float, bool]:
     """
-    Обучает линейную регрессию Sales = A - B * Price для выбранного товара.
+    Обучает линейную регрессию Sales = A - B * Price для одного товара (SKU).
     Вычисляет оптимальную цену через экстремум функции выручки Rev = P * (A - B*P).
-    
-    Возвращает:
-        tuple (параметр_A, параметр_B, оптимальная_цена, флаг_надежности).
     """
-    if product == "Все товары":
-        prod_data = df
-    else:
-        prod_data = df[df['product'] == product]
+    prod_data = df[df['product'] == product]
     if len(prod_data) < 3:
         fallback = float(prod_data['our_price'].mean()) if len(prod_data) else 0.0
         return 0.0, 0.0, fallback, False
-        
-    X = prod_data['our_price'].values.reshape(-1, 1)
-    y = prod_data['sales'].values
-    
-    model = LinearRegression().fit(X, y)
-    a = model.intercept_
-    coef = float(model.coef_[0])
-    
-    # Проверка на адекватность модели (эластичность должна быть отрицательной)
-    is_reliable = coef < 0
-    b = -coef if coef < 0 else 0.0
-    
-    # МАТЕМАТИЧЕСКАЯ МОДЕЛЬ (Спринт 3):
-    # Выручка (Revenue) = P * (A - B*P) = AP - BP^2
-    # Производная dRev/dP = A - 2BP. Максимум при A - 2BP = 0 -> P = A / 2B.
-    if b > 0:
-        optimal_price = round(a / (2 * b), 2)
-    else:
-        optimal_price = float(prod_data['our_price'].mean())
-    
-    return float(a), float(b), float(optimal_price), is_reliable
+    return _fit_linear_sales_vs_price(
+        prod_data['our_price'].values.astype(float),
+        prod_data['sales'].values.astype(float),
+        float(prod_data['our_price'].mean()),
+    )
+
+
+def fit_regression_aggregate_daily(work_df: pd.DataFrame) -> tuple[float, float, float, bool]:
+    """
+    Регрессия по дневному портфелю: одна точка на день — our_price (уже агрегат, напр. среднее), sales (сумма).
+    Для графика «портфель»: та же математика, что и для SKU, на согласованных рядах.
+    """
+    if len(work_df) < 3:
+        fb = float(work_df['our_price'].mean()) if len(work_df) else 0.0
+        return 0.0, 0.0, fb, False
+    return _fit_linear_sales_vs_price(
+        work_df['our_price'].values.astype(float),
+        work_df['sales'].values.astype(float),
+        float(work_df['our_price'].mean()),
+    )
+
+
+def predict_sales_regression(a: float, b: float, price: float, noise: float = 0.0) -> int:
+    """Спрос по линии регрессии (как в прогнозе рекомендаций), с опциональным шумом."""
+    return max(0, int(round(a - b * float(price) + float(noise))))
+
+
+def products_in_dataframe(df: pd.DataFrame) -> list[str]:
+    """SKU из PRODUCTS, по которым есть строки в df (устойчивый порядок)."""
+    return [p for p in PRODUCTS if not df.loc[df['product'] == p].empty]
 
 
 def forecast(product: str, recommended_price: float, current_revenue: float) -> dict:
     """
     Прогноз выручки на основе 'идеальной' эластичности из конфигурации PRODUCTS.
+    Только для одного SKU (имя из PRODUCTS).
     """
-    if product == "Все товары":
-        n = len(PRODUCTS)
-        base_price = sum(x["base_price"] for x in PRODUCTS.values()) / n
-        base_sales = sum(x["base_sales"] for x in PRODUCTS.values()) / n
-        elasticity = sum(x["elasticity"] for x in PRODUCTS.values()) / n
-        price_dev = recommended_price - base_price
-        pred_sales = max(0, round(base_sales - elasticity * price_dev))
-        pred_revenue = pred_sales * recommended_price
-        growth_pct = (
-            ((pred_revenue - current_revenue) / current_revenue * 100) if current_revenue > 0 else 0.0
-        )
-        return {
-            "forecast_sales": pred_sales,
-            "forecast_revenue": round(pred_revenue, 2),
-            "growth_pct": round(growth_pct, 1),
-        }
     p = PRODUCTS[product]
     price_dev = recommended_price - p['base_price']
     pred_sales = max(0, round(p['base_sales'] - p['elasticity'] * price_dev))
@@ -182,14 +192,18 @@ def predict_competitor_price(prev_comp_price: float, product_base_price: float, 
 def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = None) -> pd.DataFrame:
     """
     Запускает циклическую симуляцию рынка (MVP Спринт 4).
-    Алгоритм: Оценка -> Выбор цены -> Генерация продаж -> Обновление данных -> Повтор.
-    
+    Алгоритм: оценка (на истории df) -> выбор цены -> генерация продаж -> повтор.
+
+    При method='regression' регрессия Sales ≈ A - B·Price обучается **один раз** на
+    переданном df (как на вкладке «Рекомендации»); спрос на шагах моделируется **той же**
+    линией (плюс шум). При ненадежной регрессии спрос считается по формуле PRODUCTS.
+
     Аргументы:
         df: Исторические данные (на которых обучаются модели).
         n_steps: Горизонт прогнозирования (количество дней).
         method: 'rules' (эвристики) или 'regression' (математическая оптимизация).
-        target_product: Продукт для симуляции (если None, симулируются все доступные).
-        
+        target_product: Продукт для симуляции (если None или «Все товары», симулируются все SKU из данных).
+
     Возвращает:
         pd.DataFrame: Набор данных, включающий историю и сгенерированные шаги.
     """
@@ -201,28 +215,21 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     else:
         present_products = [p for p in PRODUCTS if (sim_df['product'] == p).any()]
     
-    retrain_every = 3
-
-    # 1. Начальный расчет цен для метода оптимизации
-    prices_map = {}
+    # Регрессия обучается только на переданной истории df (без синтетических шагов),
+    # как на вкладке «Рекомендации» для выбранного периода.
+    prices_map: dict[str, float] = {}
+    reg_params: dict[str, tuple[float, float, bool]] = {}
     if method == 'regression':
         for prod in present_products:
-            _, _, opt_p, is_reliable = fit_regression(sim_df, prod)
+            a, b, opt_p, is_reliable = fit_regression(df, prod)
+            reg_params[prod] = (a, b, is_reliable)
             if not is_reliable:
-                last_price = float(sim_df[sim_df['product'] == prod].iloc[-1]['our_price'])
+                last_price = float(df[df['product'] == prod].iloc[-1]['our_price'])
                 opt_p = last_price
             prices_map[prod] = opt_p
 
-    # 2. Основной цикл симуляции по дням
-    for step in range(n_steps):
-        if method == 'regression' and step % retrain_every == 0:
-            for prod in present_products:
-                _, _, opt_p, is_reliable = fit_regression(sim_df, prod)
-                if not is_reliable:
-                    last_price = float(sim_df[sim_df['product'] == prod].iloc[-1]['our_price'])
-                    opt_p = last_price
-                prices_map[prod] = opt_p
-
+    # Основной цикл симуляции по дням
+    for _ in range(n_steps):
         # В симуляции мы берем последнюю точку и генерируем следующую
         last_date = sim_df['date'].max()
         next_date = last_date + pd.Timedelta(days=1)
@@ -244,16 +251,33 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
             # Конкурент тоже движется: возврат к своей базе + реакция на нашу цену + шум
             competitor_price = predict_competitor_price(last['competitor_price'], p_info['base_price'], rec_price)
 
-            # ГЕНЕРАЦИЯ НОВОГО СПРОСА (Симуляция Спринта 4)
-            # Учитываем эластичность к нашей цене и разницу с конкурентом
-            dev = rec_price - p_info['base_price']
-            comp_dev = rec_price - competitor_price
-            
-            noise_scale = max(2.0, 0.08 * p_info['base_sales'])
-            noise = np.random.normal(0, noise_scale) # Масштабируем шум относительно спроса
-            
-            # Формула: Базовый спрос - (эластичность * отклонение от базы) - (влияние конкурента)
-            new_sales = max(0, round(p_info['base_sales'] - p_info['elasticity']*dev - 0.5*p_info['elasticity']*comp_dev + noise))
+            # ГЕНЕРАЦИЯ СПРОСА: при регрессии — та же линия Sales = A - B*P, что и в рекомендациях;
+            # при правилах или ненадежной регрессии — формула из PRODUCTS (конкурент + шум).
+            if method == 'regression':
+                a, b, is_rel = reg_params.get(prod, (0.0, 0.0, False))
+                if is_rel and b > 0:
+                    mu_sales = a - b * float(rec_price)
+                    noise_scale = max(2.0, 0.08 * max(abs(mu_sales), 1.0))
+                    noise = float(np.random.normal(0, noise_scale))
+                    new_sales = predict_sales_regression(a, b, rec_price, noise)
+                else:
+                    dev = rec_price - p_info['base_price']
+                    comp_dev = rec_price - competitor_price
+                    noise_scale = max(2.0, 0.08 * p_info['base_sales'])
+                    noise = np.random.normal(0, noise_scale)
+                    new_sales = max(
+                        0,
+                        round(p_info['base_sales'] - p_info['elasticity'] * dev - 0.5 * p_info['elasticity'] * comp_dev + noise),
+                    )
+            else:
+                dev = rec_price - p_info['base_price']
+                comp_dev = rec_price - competitor_price
+                noise_scale = max(2.0, 0.08 * p_info['base_sales'])
+                noise = np.random.normal(0, noise_scale)
+                new_sales = max(
+                    0,
+                    round(p_info['base_sales'] - p_info['elasticity'] * dev - 0.5 * p_info['elasticity'] * comp_dev + noise),
+                )
             
             new_rows.append({
                 'date': next_date,
