@@ -208,24 +208,41 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
                 opt_p = last_price
             prices_map[prod] = opt_p
 
-    n_prods = len(present_products)
-    base_prices = np.array([PRODUCTS[p]['base_price'] for p in present_products])
-    base_sales = np.array([PRODUCTS[p]['base_sales'] for p in present_products])
-    elasticities = np.array([PRODUCTS[p]['elasticity'] for p in present_products])
-    cogs = np.array([PRODUCTS[p].get('cogs', 0.0) for p in present_products])
-    product_ids = np.array([PRODUCTS[p]['id'] for p in present_products])
+    hierarchy_cols = [col for col in ['store_id', 'store', 'brand_id', 'brand'] if col in sim_df.columns]
+    entity_cols = hierarchy_cols + ['product_id', 'product'] if 'product_id' in sim_df.columns else hierarchy_cols + ['product']
+    entities_df = (
+        sim_df[sim_df['product'].isin(present_products)][entity_cols]
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    n_entities = len(entities_df)
+    if n_entities == 0:
+        return sim_df
 
-    reg_a = np.array([reg_params.get(p, (0.0, 0.0, False))[0] for p in present_products])
-    reg_b = np.array([reg_params.get(p, (0.0, 0.0, False))[1] for p in present_products])
-    reg_rel = np.array([reg_params.get(p, (0.0, 0.0, False))[2] for p in present_products])
+    products_by_entity = entities_df['product'].tolist()
+    base_prices = np.array([PRODUCTS[p]['base_price'] for p in products_by_entity], dtype=float)
+    base_sales = np.array([PRODUCTS[p]['base_sales'] for p in products_by_entity], dtype=float)
+    elasticities = np.array([PRODUCTS[p]['elasticity'] for p in products_by_entity], dtype=float)
+    cogs = np.array([PRODUCTS[p].get('cogs', 0.0) for p in products_by_entity], dtype=float)
+    if 'product_id' in entities_df.columns:
+        product_ids = entities_df['product_id'].to_numpy()
+    else:
+        product_ids = np.array([PRODUCTS[p]['id'] for p in products_by_entity])
 
-    last_our_prices = np.zeros(n_prods)
-    last_comp_prices = np.zeros(n_prods)
-    last_sales = np.zeros(n_prods)
-    sales_buffer = np.zeros((7, n_prods))
+    reg_a = np.array([reg_params.get(p, (0.0, 0.0, False))[0] for p in products_by_entity], dtype=float)
+    reg_b = np.array([reg_params.get(p, (0.0, 0.0, False))[1] for p in products_by_entity], dtype=float)
+    reg_rel = np.array([reg_params.get(p, (0.0, 0.0, False))[2] for p in products_by_entity], dtype=bool)
 
-    for i, p in enumerate(present_products):
-        hist = sim_df[sim_df['product'] == p]
+    last_our_prices = np.zeros(n_entities)
+    last_comp_prices = np.zeros(n_entities)
+    last_sales = np.zeros(n_entities)
+    sales_buffer = np.zeros((7, n_entities))
+
+    for i, entity in entities_df.iterrows():
+        mask = sim_df['product'] == entity['product']
+        for h_col in hierarchy_cols:
+            mask &= sim_df[h_col] == entity[h_col]
+        hist = sim_df[mask]
         if not hist.empty:
             last_our_prices[i] = float(hist['our_price'].iloc[-1])
             last_comp_prices[i] = float(hist['competitor_price'].iloc[-1])
@@ -241,24 +258,25 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     last_date = sim_df['date'].max()
     date_range = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=n_steps)
     
-    all_dates = np.repeat(date_range.values, n_prods)
+    all_dates = np.repeat(date_range.values, n_entities)
     all_ids = np.tile(product_ids, n_steps)
-    all_names = np.tile(present_products, n_steps)
+    all_names = np.tile(np.array(products_by_entity), n_steps)
+    hierarchy_values = {col: np.tile(entities_df[col].to_numpy(), n_steps) for col in hierarchy_cols}
     
-    out_our_prices = np.zeros((n_steps, n_prods))
-    out_comp_prices = np.zeros((n_steps, n_prods))
-    out_sales = np.zeros((n_steps, n_prods))
-    out_revenue = np.zeros((n_steps, n_prods))
-    out_profit = np.zeros((n_steps, n_prods))
+    out_our_prices = np.zeros((n_steps, n_entities))
+    out_comp_prices = np.zeros((n_steps, n_entities))
+    out_sales = np.zeros((n_steps, n_entities))
+    out_revenue = np.zeros((n_steps, n_entities))
+    out_profit = np.zeros((n_steps, n_entities))
     out_cogs = np.tile(cogs, (n_steps, 1))
 
     for step in range(n_steps):
-        rec_prices = np.zeros(n_prods)
+        rec_prices = np.zeros(n_entities)
         
         if method == 'rules':
             # Для правил нужно опираться на среднее за последние 7 дней
             avg7 = sales_buffer.mean(axis=0)
-            for i, p in enumerate(present_products):
+            for i, p in enumerate(products_by_entity):
                 row_mock = pd.Series({
                     'our_price': last_our_prices[i],
                     'competitor_price': last_comp_prices[i],
@@ -267,14 +285,14 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
                 rp, _ = apply_rules(row_mock, avg7[i])
                 rec_prices[i] = rp
         else:
-            for i, p in enumerate(present_products):
+            for i, p in enumerate(products_by_entity):
                 rec_prices[i] = prices_map.get(p, last_our_prices[i])
 
         comp_base = base_prices * 1.03
-        noise_comp = rng.normal(0, 0.015 * base_prices, size=n_prods)
+        noise_comp = rng.normal(0, 0.015 * base_prices, size=n_entities)
         competitor_prices = calc_competitor_prices(last_comp_prices, comp_base, last_our_prices, noise_comp)
         
-        new_sales = np.zeros(n_prods)
+        new_sales = np.zeros(n_entities)
         
         if method == 'regression':
             valid_mask = reg_rel & (reg_b > 0)
@@ -282,7 +300,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
             # Надежная регрессия
             noise_scale_reg = np.maximum(2.0, 0.08 * np.maximum(np.abs(reg_a - reg_b * rec_prices), 1.0))
             new_sales[valid_mask] = calc_demand_regression(
-                rec_prices, reg_a, reg_b, rng.normal(0, noise_scale_reg)
+                rec_prices, reg_a, reg_b, rng.normal(0, noise_scale_reg, size=n_entities)
             )[valid_mask]
             
             # Откат на эвристику (ненадежная регрессия)
@@ -295,7 +313,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
                 )
         else:
             # Чистая эвристика
-            noise = rng.normal(0, np.maximum(2.0, 0.08 * base_sales))
+            noise = rng.normal(0, np.maximum(2.0, 0.08 * base_sales), size=n_entities)
             new_sales = calc_demand_rules(
                 rec_prices, competitor_prices, base_prices, base_sales, elasticities, noise
             )
@@ -319,7 +337,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
         out_profit[step, :] = profit
 
     # Собираем результат воедино
-    new_df = pd.DataFrame({
+    new_data = {
         'date': all_dates,
         'product_id': all_ids,
         'product': all_names,
@@ -329,7 +347,10 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
         'revenue': out_revenue.flatten(),
         'cogs': out_cogs.flatten(),
         'profit': out_profit.flatten(),
-    })
+    }
+    for col in hierarchy_cols:
+        new_data[col] = hierarchy_values[col]
+    new_df = pd.DataFrame(new_data)
     
     sim_df = pd.concat([sim_df, new_df], ignore_index=True)
     return sim_df
