@@ -18,9 +18,11 @@ REQUIRED_COLS = {
     "competitor_price",
     "sales",
     "revenue",
+    "cogs",
+    "profit",
 }
 
-NUMERIC_COLS = ["our_price", "competitor_price", "sales", "revenue"]
+NUMERIC_COLS = ["our_price", "competitor_price", "sales", "revenue", "cogs", "profit"]
 
 
 def _cleanup_data_files_on_exit() -> None:
@@ -41,7 +43,7 @@ def df_fingerprint(df: pd.DataFrame) -> tuple:
     """Компактная сигнатура набора данных для инвалидации прогноза."""
     if df is None or len(df) == 0:
         return (0,)
-    sub = df[["date", "product", "sales", "revenue", "our_price"]].copy()
+    sub = df[["date", "product", "sales", "revenue", "profit", "our_price"]].copy()
     h = int(pd.util.hash_pandas_object(sub, index=True).sum())
     return (len(df), str(df["date"].min()), str(df["date"].max()), h)
 
@@ -69,6 +71,7 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
         "competitor_price": "цена конкурента",
         "sales": "продажи",
         "revenue": "выручка",
+        "cogs": "себестоимость",
     }
     for col, label in negative_checks.items():
         if (out[col] < 0).any():
@@ -79,12 +82,19 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
         st.error("В CSV есть пустые значения в колонке `product`.")
         return None
 
-    # Допуск на округление: выручка должна совпадать с sales * our_price.
     expected_revenue = out["sales"] * out["our_price"]
-    mismatch = (out["revenue"] - expected_revenue).abs() > 0.01
-    if mismatch.any():
+    mismatch_rev = (out["revenue"] - expected_revenue).abs() > 0.01
+    if mismatch_rev.any():
         st.error(
             "В CSV есть несогласованные строки: `revenue` не совпадает с `sales * our_price`."
+        )
+        return None
+        
+    expected_profit = out["revenue"] - out["sales"] * out["cogs"]
+    mismatch_prof = (out["profit"] - expected_profit).abs() > 0.01
+    if mismatch_prof.any():
+        st.error(
+            "В CSV есть несогласованные строки: `profit` не совпадает с `revenue - sales * cogs`."
         )
         return None
 
@@ -117,6 +127,8 @@ def clear_predict_file(columns: list[str] | None = None) -> None:
         "competitor_price",
         "sales",
         "revenue",
+        "cogs",
+        "profit",
     ]
     pd.DataFrame(columns=cols).to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()

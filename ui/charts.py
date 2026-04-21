@@ -27,7 +27,7 @@ def render_stored_simulation(sim_last: dict) -> None:
             linewidth=2,
         )
     ax.axvline(max_period_date, color="black", alpha=0.3, linestyle=":")
-    ax.set_ylabel(f"Выручка {title_suffix} (₽)")
+    ax.set_ylabel(f"Прибыль {title_suffix} (₽)")
     ax.set_title(f"Сценарный прогноз на {n_steps} дней (от {pd.Timestamp(max_period_date).date()})")
     ax.legend()
     plt.xticks(rotation=45)
@@ -44,20 +44,20 @@ def render_stored_simulation(sim_last: dict) -> None:
     m1, m2, m3 = st.columns(3)
     if future_empty or (avg_sim is not None and np.isnan(avg_sim)):
         m1.warning(
-            "Не удалось вычислить ожидаемую выручку: в симуляции нет корректных будущих точек "
+            "Не удалось вычислить ожидаемую прибыль: в симуляции нет корректных будущих точек "
             "относительно выбранного периода."
         )
-        m2.metric("Ожидаемая выручка (1-й день)", "—")
-        m3.metric("Ожидаемая выручка (последний день)", "—")
+        m2.metric("Ожидаемая прибыль (1-й день)", "—")
+        m3.metric("Ожидаемая прибыль (последний день)", "—")
     else:
         m1.metric(
-            "Ожидаемая выручка/день",
+            "Ожидаемая прибыль/день",
             f"{avg_sim:,.0f} ₽",
             f"{delta:+.1f}%",
-            help="Среднее значение выручки за период симуляции в сравнении с историческим средним.",
+            help="Среднее значение прибыли за период симуляции в сравнении с историческим средним.",
         )
-        m2.metric("Ожидаемая выручка (1-й день)", f"{first_day_rev:,.0f} ₽")
-        m3.metric("Ожидаемая выручка (последний день)", f"{last_day_rev:,.0f} ₽")
+        m2.metric("Ожидаемая прибыль (1-й день)", f"{first_day_rev:,.0f} ₽")
+        m3.metric("Ожидаемая прибыль (последний день)", f"{last_day_rev:,.0f} ₽")
 
 
 def _daily_price_sales_agg(prod_df: pd.DataFrame) -> pd.DataFrame:

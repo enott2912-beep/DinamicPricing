@@ -17,67 +17,78 @@ import numpy as np
 
 # Импорты из центральной модели
 sys.path.append(str(Path(__file__).parent.parent))
-from model.pricing import PRODUCTS, SEED, predict_competitor_price
-
-
-def generate_product_data(product: str, n_days: int, start_date: datetime) -> pd.DataFrame:
-    """Генерирует данные продаж для одного товара за n_days дней."""
-    # Фиксируем воспроизводимость для каждого товара
-    product_hash = sum(ord(c) for c in product)
-    np.random.seed(SEED + product_hash % 10000)
-
-    params = PRODUCTS[product]
-    base_price = params['base_price']
-    elasticity = params['elasticity']
-    base_sales = params['base_sales']
-
-    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
-
-    # Цены колеблются вокруг базы
-    our_prices = np.round(base_price * np.random.uniform(0.9, 1.1, size=n_days), 2)
-    competitor_base = base_price * 1.03
-    competitor_prices = np.zeros(n_days)
-    competitor_prices[0] = max(
-        1,
-        competitor_base + np.random.normal(0, 0.02 * base_price)
-    )
-    for i in range(1, n_days):
-        # Конкурент имеет свою базу, не следует механически за нашей ценой.
-        competitor_prices[i] = predict_competitor_price(
-            competitor_prices[i - 1], base_price, our_prices[i - 1]
-        )
-    competitor_prices = np.round(np.maximum(1, competitor_prices), 2)
-
-    # Формула: Учитываем разницу с базой и разницу с конкурентом
-    # (our - comp) > 0 -> спрос падает
-    price_diff_base = our_prices - base_price
-    price_diff_comp = our_prices - competitor_prices
-    
-    noise_scale = max(2.0, 0.08 * base_sales)
-    noise = np.random.normal(0, noise_scale, size=n_days)
-    # Основная эластичность + влияние конкурента (вес 0.5)
-    sales = np.maximum(0, np.round(
-        base_sales - elasticity * price_diff_base - 0.5 * elasticity * price_diff_comp + noise
-    ))
-    
-    revenue = np.round(sales * our_prices, 2)
-
-    return pd.DataFrame({
-        'date': dates,
-        'product_id': params['id'],
-        'product': product,
-        'our_price': our_prices,
-        'competitor_price': competitor_prices,
-        'sales': sales,
-        'revenue': revenue,
-    })
+from model.pricing import PRODUCTS, SEED
 
 
 def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
-    """Объединяет данные всех товаров в один DataFrame."""
-    frames = [generate_product_data(p, n_days, start_date) for p in PRODUCTS]
-    return pd.concat(frames, ignore_index=True).sort_values(['date', 'product']).reset_index(drop=True)
+    """Векторизованная генерация данных для всех товаров сразу."""
+    rng = np.random.default_rng(SEED)
+    
+    product_names = list(PRODUCTS.keys())
+    n_prods = len(product_names)
+    
+    base_prices = np.array([PRODUCTS[p]['base_price'] for p in product_names])
+    base_sales = np.array([PRODUCTS[p]['base_sales'] for p in product_names])
+    elasticities = np.array([PRODUCTS[p]['elasticity'] for p in product_names])
+    product_ids = np.array([PRODUCTS[p]['id'] for p in product_names])
+    cogs = np.array([PRODUCTS[p].get('cogs', 0.0) for p in product_names])
+    
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
+    
+    # Цены
+    base_price_mat = np.tile(base_prices, (n_days, 1))
+    our_prices = np.round(base_price_mat * rng.uniform(0.9, 1.1, size=(n_days, n_prods)), 2)
+    
+    comp_base = base_prices * 1.03
+    competitor_prices = np.zeros((n_days, n_prods))
+    competitor_prices[0] = np.maximum(1, comp_base + rng.normal(0, 0.02 * base_prices, size=n_prods))
+    
+    for i in range(1, n_days):
+        next_prices = (
+            0.75 * competitor_prices[i - 1]
+            + 0.20 * comp_base
+            + 0.05 * our_prices[i - 1]
+            + rng.normal(0, 0.015 * base_prices, size=n_prods)
+        )
+        competitor_prices[i] = np.round(np.maximum(1, next_prices), 2)
+        
+    price_diff_base = our_prices - base_price_mat
+    price_diff_comp = our_prices - competitor_prices
+    
+    noise_scale = np.maximum(2.0, 0.08 * base_sales)
+    noise_mat = np.tile(noise_scale, (n_days, 1))
+    noise = rng.normal(0, noise_mat, size=(n_days, n_prods))
+    
+    elast_mat = np.tile(elasticities, (n_days, 1))
+    base_sales_mat = np.tile(base_sales, (n_days, 1))
+    
+    sales = np.maximum(0, np.round(
+        base_sales_mat - elast_mat * price_diff_base - 0.5 * elast_mat * price_diff_comp + noise
+    ))
+    
+    revenue = np.round(sales * our_prices, 2)
+    cogs_mat = np.tile(cogs, (n_days, 1))
+    profit = np.round(revenue - sales * cogs_mat, 2)
+    
+    date_col = np.repeat(dates, n_prods)
+    product_id_col = np.tile(product_ids, n_days)
+    product_col = np.tile(product_names, n_days)
+    cogs_col = np.tile(cogs, n_days)
+    
+    df = pd.DataFrame({
+        'date': date_col,
+        'product_id': product_id_col,
+        'product': product_col,
+        'our_price': our_prices.flatten(),
+        'competitor_price': competitor_prices.flatten(),
+        'sales': sales.flatten(),
+        'revenue': revenue.flatten(),
+        'cogs': cogs_col,
+        'profit': profit.flatten()
+    })
+    
+    return df.sort_values(['date', 'product']).reset_index(drop=True)
 
 
 def save_data(df: pd.DataFrame, path: Path) -> None:
