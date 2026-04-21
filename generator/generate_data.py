@@ -18,6 +18,7 @@ import numpy as np
 # Импорты из центральной модели
 sys.path.append(str(Path(__file__).parent.parent))
 from model.pricing import PRODUCTS, SEED
+from model.math_engine import calc_competitor_prices, calc_demand_rules
 
 
 def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
@@ -45,17 +46,9 @@ def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
     competitor_prices[0] = np.maximum(1, comp_base + rng.normal(0, 0.02 * base_prices, size=n_prods))
     
     for i in range(1, n_days):
-        next_prices = (
-            0.75 * competitor_prices[i - 1]
-            + 0.20 * comp_base
-            + 0.05 * our_prices[i - 1]
-            + rng.normal(0, 0.015 * base_prices, size=n_prods)
-        )
-        competitor_prices[i] = np.round(np.maximum(1, next_prices), 2)
+        noise = rng.normal(0, 0.015 * base_prices, size=n_prods)
+        competitor_prices[i] = calc_competitor_prices(competitor_prices[i - 1], comp_base, our_prices[i - 1], noise)
         
-    price_diff_base = our_prices - base_price_mat
-    price_diff_comp = our_prices - competitor_prices
-    
     noise_scale = np.maximum(2.0, 0.08 * base_sales)
     noise_mat = np.tile(noise_scale, (n_days, 1))
     noise = rng.normal(0, noise_mat, size=(n_days, n_prods))
@@ -63,9 +56,14 @@ def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
     elast_mat = np.tile(elasticities, (n_days, 1))
     base_sales_mat = np.tile(base_sales, (n_days, 1))
     
-    sales = np.maximum(0, np.round(
-        base_sales_mat - elast_mat * price_diff_base - 0.5 * elast_mat * price_diff_comp + noise
-    ))
+    sales = calc_demand_rules(
+        our_prices=our_prices,
+        competitor_prices=competitor_prices,
+        base_prices=base_price_mat,
+        base_sales=base_sales_mat,
+        elasticities=elast_mat,
+        noise=noise
+    )
     
     revenue = np.round(sales * our_prices, 2)
     cogs_mat = np.tile(cogs, (n_days, 1))

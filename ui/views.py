@@ -5,14 +5,13 @@ import streamlit as st
 
 from model.pricing import (
     apply_rules,
-    fit_regression,
     fit_regression_aggregate_daily,
     forecast,
-    forecast_from_regression,
     products_in_dataframe,
     simulate,
     PRODUCTS,
 )
+from model.analytics import get_recommendations_all_products, get_recommendations_single_product
 from ui.calendars import (
     apply_overview_date_filter,
     apply_predict_period_filter,
@@ -331,69 +330,10 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     last_row = work_df.iloc[-1]
 
     if selected_product == "Все товары":
-        sku_list = products_in_dataframe(prod_df)
-        if not sku_list:
+        res = get_recommendations_all_products(prod_df, work_df)
+        if not res:
             st.warning("В данных нет ни одного товара из каталога.")
             st.stop()
-
-        rule_rows = []
-        reg_rows = []
-        rec_prices_rules: list[float] = []
-        opts: list[float] = []
-        rel_flags: list[bool] = []
-        total_profit_actual = 0.0
-        total_pred_rules = 0.0
-        total_pred_reg = 0.0
-
-        for p in sku_list:
-            sub = prod_df[prod_df["product"] == p].sort_values("date")
-            last_i = sub.iloc[-1]
-            prev = sub["sales"].iloc[:-1]
-            avg7 = float(prev.tail(7).mean()) if len(prev) > 0 else float(last_i["sales"])
-            rp, rn = apply_rules(last_i, avg7)
-            fc_r = forecast(p, rp, float(last_i["profit"]))
-            total_profit_actual += float(last_i["profit"])
-            total_pred_rules += float(fc_r["forecast_profit"])
-            rec_prices_rules.append(rp)
-            rule_rows.append(
-                {
-                    "Товар": p,
-                    "Цена, ₽": round(float(last_i["our_price"]), 2),
-                    "Цена (правила), ₽": rp,
-                    "Правило": rn,
-                    "Прогноз прибыли, ₽": fc_r["forecast_profit"],
-                    "Δ к факту, %": fc_r["growth_pct"],
-                }
-            )
-
-            a_i, b_i, opt_i, rel_i = fit_regression(prod_df, p)
-            fc_g = forecast_from_regression(a_i, b_i, opt_i, float(last_i["profit"]), float(last_i.get("cogs", PRODUCTS.get(p, {}).get("cogs", 0.0))))
-            total_pred_reg += float(fc_g["forecast_profit"])
-            opts.append(opt_i)
-            rel_flags.append(rel_i)
-            reg_rows.append(
-                {
-                    "Товар": p,
-                    "Цена, ₽": round(float(last_i["our_price"]), 2),
-                    "Цена (регр.), ₽": opt_i,
-                    "Надёжн.": "да" if rel_i else "нет",
-                    "Прогноз прибыли, ₽": fc_g["forecast_profit"],
-                    "Δ к факту, %": fc_g["growth_pct"],
-                    "A": round(a_i, 2),
-                    "B": round(b_i, 4),
-                }
-            )
-
-        mean_rec_rules = float(np.mean(rec_prices_rules))
-        mean_opt_reg = float(np.mean(opts))
-        growth_rules_pct = (
-            (total_pred_rules - total_profit_actual) / total_profit_actual * 100 if total_profit_actual > 0 else 0.0
-        )
-        growth_reg_pct = (
-            (total_pred_reg - total_profit_actual) / total_profit_actual * 100 if total_profit_actual > 0 else 0.0
-        )
-
-        a_agg, b_agg, opt_agg, rel_agg = fit_regression_aggregate_daily(work_df)
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -403,13 +343,13 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
             st.metric("Суммарная прибыль", f"{last_row['profit']:.2f} ₽")
         with c2:
             st.subheader("Эвристика")
-            st.metric("Средняя цена (правила)", f"{mean_rec_rules:.2f} ₽", f"{growth_rules_pct:+.1f}% к сумме прибыли")
+            st.metric("Средняя цена (правила)", f"{res['mean_rec_rules']:.2f} ₽", f"{res['growth_rules_pct']:+.1f}% к сумме прибыли")
             st.caption("Правило считается **по каждому SKU**; прогноз — из PRODUCTS, затем сумма по товарам.")
         with c3:
             st.subheader("Регрессия")
-            st.metric("Средняя цена (регр.)", f"{mean_opt_reg:.2f} ₽", f"{growth_reg_pct:+.1f}% к сумме прибыли")
+            st.metric("Средняя цена (регр.)", f"{res['mean_opt_reg']:.2f} ₽", f"{res['growth_reg_pct']:+.1f}% к сумме прибыли")
             st.caption("Оптимум **по каждому SKU** на своей истории; % — относительно суммы фактической прибыли за день.")
-            if not all(rel_flags):
+            if not res['all_rel']:
                 st.warning(
                     "У части товаров наклон регрессии не отрицательный — для них оптимальная цена условна "
                     "(см. колонку «Надёжн.» в таблице)."
@@ -418,9 +358,9 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
         st.divider()
         t1, t2 = st.tabs(["Эвристика по SKU", "Регрессия по SKU"])
         with t1:
-            st.dataframe(pd.DataFrame(rule_rows), width='stretch', hide_index=True)
+            st.dataframe(pd.DataFrame(res['rule_rows']), width='stretch', hide_index=True)
         with t2:
-            st.dataframe(pd.DataFrame(reg_rows), width='stretch', hide_index=True)
+            st.dataframe(pd.DataFrame(res['reg_rows']), width='stretch', hide_index=True)
 
         st.divider()
         st.subheader("Агрегированная прибыль vs средняя цена портфеля (по дням)")
@@ -429,19 +369,19 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
             "вершина — условный оптимум **для портфельного ряда**, не обязательно совпадает со средним "
             "пер-товарных оптимумов из таблицы."
         )
-        anchor = opt_agg if opt_agg > 0 else float(last_row["our_price"])
+        anchor = res['opt_agg'] if res['opt_agg'] > 0 else float(last_row["our_price"])
         p_min = max(1.0, anchor * 0.5)
         p_max = max(p_min * 1.01, anchor * 1.5)
         prices = np.linspace(p_min, p_max, 100)
-        revenues = prices * (a_agg - b_agg * prices)
+        revenues = prices * (res['a_agg'] - res['b_agg'] * prices)
         c_val = float(work_df['cogs'].mean()) if 'cogs' in work_df.columns else 0.0
-        profits = (prices - c_val) * (a_agg - b_agg * prices)
+        profits = (prices - c_val) * (res['a_agg'] - res['b_agg'] * prices)
 
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(prices, profits, label="Прогноз прибыли (агрегат)", color="gray", alpha=0.5)
         ax.axvline(last_row["our_price"], color="red", ls="--", label=f"Средняя сейчас ({last_row['our_price']:.2f})")
-        if rel_agg and b_agg > 0:
-            ax.axvline(opt_agg, color="green", ls="-", label=f"Оптимум агрег. ({opt_agg:.2f})")
+        if res['rel_agg'] and res['b_agg'] > 0:
+            ax.axvline(res['opt_agg'], color="green", ls="-", label=f"Оптимум агрег. ({res['opt_agg']:.2f})")
         ax.set_xlabel("Средняя цена портфеля (₽)")
         ax.set_ylabel("Прогнозируемая прибыль (модель по дням)")
         ax.legend()
@@ -449,37 +389,29 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
         plt.close(fig)
 
         st.info(
-            f"👉 **Итог по портфелю**: суммарная прибыль последнего дня {total_profit_actual:.2f} ₽ → "
-            f"суммарный прогноз по регрессии {total_pred_reg:.2f} ₽ (**{growth_reg_pct:+.1f}%**); "
-            f"средняя рекомендованная цена по SKU {mean_opt_reg:.2f} ₽."
+            f"👉 **Итог по портфелю**: суммарная прибыль последнего дня {res['total_profit_actual']:.2f} ₽ → "
+            f"суммарный прогноз по регрессии {res['total_pred_reg']:.2f} ₽ (**{res['growth_reg_pct']:+.1f}%**); "
+            f"средняя рекомендованная цена по SKU {res['mean_opt_reg']:.2f} ₽."
         )
         return
 
-    prev_sales = work_df["sales"].iloc[:-1]
-    avg7 = prev_sales.tail(7).mean() if len(prev_sales) > 0 else last_row["sales"]
-
-    rec_price_rules, rule_name = apply_rules(last_row, avg7)
-    fc_rules = forecast(selected_product, rec_price_rules, float(last_row["profit"]))
-
-    a, b, opt_price_reg, is_reg_reliable = fit_regression(prod_df, selected_product)
-    comp_cogs = float(last_row.get('cogs', PRODUCTS.get(selected_product, {}).get('cogs', 0.0)))
-    fc_reg = forecast_from_regression(a, b, opt_price_reg, float(last_row["profit"]), comp_cogs)
+    res = get_recommendations_single_product(prod_df, work_df, selected_product)
 
     c1, c2, c3 = st.columns(3)
     with c1:
         st.subheader("Текущее состояние")
-        st.metric("Наша цена", f"{last_row['our_price']:.2f} ₽")
-        st.metric("Цена конкурента", f"{last_row['competitor_price']:.2f} ₽")
-        st.metric("Прибыль (день)", f"{last_row['profit']:.2f} ₽")
+        st.metric("Наша цена", f"{res['last_row']['our_price']:.2f} ₽")
+        st.metric("Цена конкурента", f"{res['last_row']['competitor_price']:.2f} ₽")
+        st.metric("Прибыль (день)", f"{res['last_row']['profit']:.2f} ₽")
     with c2:
         st.subheader("Эвристика")
-        st.metric("Новая цена", f"{rec_price_rules:.2f} ₽", f"{fc_rules['growth_pct']:+.1f}% прибыли")
-        st.caption(f"Правило: {rule_name}")
+        st.metric("Новая цена", f"{res['rec_price_rules']:.2f} ₽", f"{res['fc_rules']['growth_pct']:+.1f}% прибыли")
+        st.caption(f"Правило: {res['rule_name']}")
     with c3:
         st.subheader("Регрессия")
-        st.metric("Новая цена", f"{opt_price_reg:.2f} ₽", f"{fc_reg['growth_pct']:+.1f}% прибыли")
-        st.caption(f"Формула: Profit = (P - C) * ({a:.1f} - {b:.2f}*P)")
-        if not is_reg_reliable:
+        st.metric("Новая цена", f"{res['opt_price_reg']:.2f} ₽", f"{res['fc_reg']['growth_pct']:+.1f}% прибыли")
+        st.caption(f"Формула: Profit = (P - C) * ({res['a']:.1f} - {res['b']:.2f}*P)")
+        if not res['is_reg_reliable']:
             st.warning(
                 "Наклон регрессии не отрицательный: оценка эластичности ненадежна, "
                 "поэтому оптимальная цена может быть неточной."
@@ -487,16 +419,18 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
 
     st.divider()
     st.subheader("Анализ эластичности прибыли (Regression)")
-    anchor = opt_price_reg if opt_price_reg > 0 else float(last_row["our_price"])
+    anchor = res['opt_price_reg'] if res['opt_price_reg'] > 0 else float(res['last_row']["our_price"])
     p_min = max(1.0, anchor * 0.5)
     p_max = max(p_min * 1.01, anchor * 1.5)
     prices = np.linspace(p_min, p_max, 100)
-    profits = (prices - comp_cogs) * (a - b * prices)
+    
+    comp_cogs = float(res['last_row'].get('cogs', PRODUCTS.get(selected_product, {}).get('cogs', 0.0)))
+    profits = (prices - comp_cogs) * (res['a'] - res['b'] * prices)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(prices, profits, label="Прогноз прибыли", color="gray", alpha=0.5)
-    ax.axvline(last_row["our_price"], color="red", ls="--", label=f"Текущая ({last_row['our_price']:.2f})")
-    ax.axvline(opt_price_reg, color="green", ls="-", label=f"Оптимальная ({opt_price_reg:.2f})")
+    ax.axvline(res['last_row']["our_price"], color="red", ls="--", label=f"Текущая ({res['last_row']['our_price']:.2f})")
+    ax.axvline(res['opt_price_reg'], color="green", ls="-", label=f"Оптимальная ({res['opt_price_reg']:.2f})")
     ax.set_xlabel("Цена (₽)")
     ax.set_ylabel("Прогнозируемая прибыль")
     ax.legend()
@@ -504,8 +438,8 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     plt.close(fig)
 
     st.info(
-        f"👉 **Итог по {selected_product}**: старая цена {last_row['our_price']:.2f} ₽ → "
-        f"новая цена {opt_price_reg:.2f} ₽ | прогноз прибыли: {fc_reg['growth_pct']:+.1f}%"
+        f"👉 **Итог по {selected_product}**: старая цена {res['last_row']['our_price']:.2f} ₽ → "
+        f"новая цена {res['opt_price_reg']:.2f} ₽ | прогноз прибыли: {res['fc_reg']['growth_pct']:+.1f}%"
     )
 
 

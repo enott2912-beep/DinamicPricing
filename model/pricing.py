@@ -1,5 +1,11 @@
 import numpy as np
 import pandas as pd
+
+from model.math_engine import (
+    calc_competitor_prices,
+    calc_demand_regression,
+    calc_demand_rules,
+)
 from sklearn.linear_model import LinearRegression
 
 # ############################################################################
@@ -144,16 +150,23 @@ def products_in_dataframe(df: pd.DataFrame) -> list[str]:
     return [p for p in PRODUCTS if not df.loc[df['product'] == p].empty]
 
 
-def forecast(product: str, recommended_price: float, current_metric: float) -> dict:
+def forecast(product: str, recommended_price: float, current_metric: float, regression_params: tuple = None) -> dict:
     """
-    Прогноз выручки и прибыли на основе 'идеальной' эластичности из конфигурации PRODUCTS.
-    Только для одного SKU (имя из PRODUCTS).
+    Прогноз выручки и прибыли (DRY: заменяет две старые функции).
+    Если переданы regression_params = (a, b), используется регрессия. Иначе — базовая эластичность (PRODUCTS).
     """
     p = PRODUCTS.get(product, {})
-    price_dev = recommended_price - p.get('base_price', 0)
-    pred_sales = max(0, round(p.get('base_sales', 0) - p.get('elasticity', 0) * price_dev))
+    cogs = p.get('cogs', 0)
+    
+    if regression_params:
+        a, b = regression_params
+        pred_sales = max(0, round(a - b * recommended_price))
+    else:
+        price_dev = recommended_price - p.get('base_price', 0)
+        pred_sales = max(0, round(p.get('base_sales', 0) - p.get('elasticity', 0) * price_dev))
+        
     pred_revenue = pred_sales * recommended_price
-    pred_profit = pred_sales * (recommended_price - p.get('cogs', 0))
+    pred_profit = pred_sales * (recommended_price - cogs)
     
     growth_pct = ((pred_profit - current_metric) / current_metric * 100) if current_metric > 0 else (0.0 if pred_profit == 0 else 100.0)
     return {
@@ -162,38 +175,6 @@ def forecast(product: str, recommended_price: float, current_metric: float) -> d
         'forecast_profit': round(pred_profit, 2),
         'growth_pct': round(growth_pct, 1)
     }
-
-
-def forecast_from_regression(a: float, b: float, recommended_price: float, current_metric: float, cogs: float = 0.0) -> dict:
-    """
-    Прогноз выручки и прибыли на основе вычисленных параметров регрессии (реальные данные).
-    """
-    pred_sales = max(0, round(a - b * recommended_price))
-    pred_revenue = pred_sales * recommended_price
-    pred_profit = pred_sales * (recommended_price - cogs)
-    growth_pct = ((pred_profit - current_metric) / current_metric * 100) if current_metric > 0 else (0.0 if pred_profit == 0 else 100.0)
-    return {
-        'forecast_sales': pred_sales,
-        'forecast_revenue': round(pred_revenue, 2),
-        'forecast_profit': round(pred_profit, 2),
-        'growth_pct': round(growth_pct, 1)
-    }
-
-
-def predict_competitor_price(prev_comp_price: float, product_base_price: float, our_prev_price: float) -> float:
-    """
-    Рассчитывает ожидаемую цену конкурента на следующий период (шаг).
-    Конкурент стремится к своей базовой цене, имеет инерцию (prev_comp_price) 
-    и частично реагирует на нашу цену (our_prev_price).
-    """
-    comp_base = float(product_base_price * 1.03)
-    competitor_price = (
-        0.75 * float(prev_comp_price)
-        + 0.20 * comp_base
-        + 0.05 * float(our_prev_price)
-        + np.random.normal(0, 0.015 * float(product_base_price))
-    )
-    return round(max(1.0, competitor_price), 2)
 
 
 # ############################################################################
@@ -291,32 +272,33 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
 
         comp_base = base_prices * 1.03
         noise_comp = rng.normal(0, 0.015 * base_prices, size=n_prods)
-        competitor_prices = 0.75 * last_comp_prices + 0.20 * comp_base + 0.05 * last_our_prices + noise_comp
-        competitor_prices = np.round(np.maximum(1.0, competitor_prices), 2)
+        competitor_prices = calc_competitor_prices(last_comp_prices, comp_base, last_our_prices, noise_comp)
         
         new_sales = np.zeros(n_prods)
         
         if method == 'regression':
             valid_mask = reg_rel & (reg_b > 0)
             
-            # Для надежной регрессии
-            mu_sales = reg_a - reg_b * rec_prices
-            noise_scale_reg = np.maximum(2.0, 0.08 * np.maximum(np.abs(mu_sales), 1.0))
-            new_sales[valid_mask] = np.maximum(0, np.round(mu_sales + rng.normal(0, noise_scale_reg)))[valid_mask]
+            # Надежная регрессия
+            noise_scale_reg = np.maximum(2.0, 0.08 * np.maximum(np.abs(reg_a - reg_b * rec_prices), 1.0))
+            new_sales[valid_mask] = calc_demand_regression(
+                rec_prices, reg_a, reg_b, rng.normal(0, noise_scale_reg)
+            )[valid_mask]
             
-            # Для ненадежной регрессии откат на формулу из PRODUCTS
+            # Откат на эвристику (ненадежная регрессия)
             invalid_mask = ~valid_mask
             if invalid_mask.any():
-                dev = rec_prices[invalid_mask] - base_prices[invalid_mask]
-                comp_dev = rec_prices[invalid_mask] - competitor_prices[invalid_mask]
-                noise_scale_rules = np.maximum(2.0, 0.08 * base_sales[invalid_mask])
-                sales_rules = base_sales[invalid_mask] - elasticities[invalid_mask] * dev - 0.5 * elasticities[invalid_mask] * comp_dev + rng.normal(0, noise_scale_rules)
-                new_sales[invalid_mask] = np.maximum(0, np.round(sales_rules))
+                noise_rules = rng.normal(0, np.maximum(2.0, 0.08 * base_sales[invalid_mask]))
+                new_sales[invalid_mask] = calc_demand_rules(
+                    rec_prices[invalid_mask], competitor_prices[invalid_mask], base_prices[invalid_mask],
+                    base_sales[invalid_mask], elasticities[invalid_mask], noise_rules
+                )
         else:
-            dev = rec_prices - base_prices
-            comp_dev = rec_prices - competitor_prices
-            noise_scale = np.maximum(2.0, 0.08 * base_sales)
-            new_sales = np.maximum(0, np.round(base_sales - elasticities * dev - 0.5 * elasticities * comp_dev + rng.normal(0, noise_scale)))
+            # Чистая эвристика
+            noise = rng.normal(0, np.maximum(2.0, 0.08 * base_sales))
+            new_sales = calc_demand_rules(
+                rec_prices, competitor_prices, base_prices, base_sales, elasticities, noise
+            )
 
         revenue = np.round(new_sales * rec_prices, 2)
         profit = np.round(revenue - new_sales * cogs, 2)
