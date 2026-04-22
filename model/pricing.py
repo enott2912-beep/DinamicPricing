@@ -2,7 +2,8 @@ import numpy as np
 import pandas as pd
 
 from model.math_engine import (
-    calc_competitor_prices,
+    calc_competitor_1_prices,
+    calc_competitor_2_prices,
     calc_demand_regression,
     calc_demand_rules,
 )
@@ -23,6 +24,14 @@ PRODUCTS = {
     'Шоколад':  {'id': 5, 'base_price': 100, 'elasticity': 2.5, 'base_sales': 200, 'cogs': 65},
 }
 
+SEASONALITY_PHASE = {
+    'Кофе': -np.pi / 2,   # зимний пик
+    'Сок': np.pi / 2,     # летний пик
+    'Молоко': 0.0,
+    'Хлеб': 0.0,
+    'Шоколад': -np.pi / 3,
+}
+
 # ############################################################################
 # 2. ЭВРИСТИЧЕСКОЕ ЦЕНООБРАЗОВАНИЕ (RULE-BASED)
 # ############################################################################
@@ -39,7 +48,9 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
         tuple (рекомендованная_цена, название_правила).
     """
     price = float(row['our_price'])
-    comp_price = float(row['competitor_price'])
+    comp_1 = float(row.get('competitor_1_price', row.get('competitor_price', price)))
+    comp_2 = float(row.get('competitor_2_price', row.get('competitor_price', price)))
+    comp_price = min(comp_1, comp_2)
     sales = float(row['sales'])
     
     # ПРАВИЛО 0: Строгое соответствие ТЗ Спринта 2 (если продаж совсем не было)
@@ -95,7 +106,13 @@ def _fit_linear_sales_vs_price(our_prices: np.ndarray, sales: np.ndarray, fallba
     is_reliable = coef < 0
     b = -coef if coef < 0 else 0.0
     if b > 0:
-        optimal_price = round((a + b * cogs) / (2 * b), 2)
+        raw_opt = float((a + b * cogs) / (2 * b))
+        p_min_obs = float(np.min(our_prices))
+        p_max_obs = float(np.max(our_prices))
+        # Ограничиваем оптимум реалистичным коридором вокруг наблюдаемого диапазона.
+        p_floor = max(1.0, cogs * 1.03, p_min_obs * 0.85)
+        p_ceiling = max(p_floor, p_max_obs * 1.25)
+        optimal_price = round(float(np.clip(raw_opt, p_floor, p_ceiling)), 2)
     else:
         optimal_price = float(fallback_price)
     return a, b, optimal_price, is_reliable
@@ -106,7 +123,10 @@ def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float,
     Обучает линейную регрессию Sales = A - B * Price для одного товара (SKU).
     Вычисляет оптимальную цену через экстремум функции прибыли (с учетом COGS).
     """
-    prod_data = df[df['product'] == product]
+    prod_data = df[df['product'] == product].copy()
+    if "is_oos" in prod_data.columns:
+        prod_data = prod_data[~prod_data["is_oos"].astype(bool)]
+    prod_data = prod_data[prod_data["sales"] > 0]
     if len(prod_data) < 3:
         fallback = float(prod_data['our_price'].mean()) if len(prod_data) else 0.0
         return 0.0, 0.0, fallback, False
@@ -126,16 +146,20 @@ def fit_regression_aggregate_daily(work_df: pd.DataFrame) -> tuple[float, float,
     Регрессия по дневному портфелю: одна точка на день.
     Передаем средний cogs для правильного расчета агрегированного оптимума.
     """
-    if len(work_df) < 3:
+    clean_df = work_df.copy()
+    if "is_oos" in clean_df.columns:
+        clean_df = clean_df[~clean_df["is_oos"].astype(bool)]
+    clean_df = clean_df[clean_df["sales"] > 0]
+    if len(clean_df) < 3:
         fb = float(work_df['our_price'].mean()) if len(work_df) else 0.0
         return 0.0, 0.0, fb, False
     
-    c_val = float(work_df['cogs'].mean()) if 'cogs' in work_df.columns else 0.0
+    c_val = float(clean_df['cogs'].mean()) if 'cogs' in clean_df.columns else 0.0
     
     return _fit_linear_sales_vs_price(
-        work_df['our_price'].values.astype(float),
-        work_df['sales'].values.astype(float),
-        float(work_df['our_price'].mean()),
+        clean_df['our_price'].values.astype(float),
+        clean_df['sales'].values.astype(float),
+        float(clean_df['our_price'].mean()),
         c_val
     )
 
@@ -208,7 +232,7 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
                 opt_p = last_price
             prices_map[prod] = opt_p
 
-    hierarchy_cols = [col for col in ['store_id', 'store', 'brand_id', 'brand'] if col in sim_df.columns]
+    hierarchy_cols = [col for col in ['store_id', 'store', 'store_profile', 'brand_id', 'brand'] if col in sim_df.columns]
     entity_cols = hierarchy_cols + ['product_id', 'product'] if 'product_id' in sim_df.columns else hierarchy_cols + ['product']
     entities_df = (
         sim_df[sim_df['product'].isin(present_products)][entity_cols]
@@ -232,9 +256,11 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     reg_a = np.array([reg_params.get(p, (0.0, 0.0, False))[0] for p in products_by_entity], dtype=float)
     reg_b = np.array([reg_params.get(p, (0.0, 0.0, False))[1] for p in products_by_entity], dtype=float)
     reg_rel = np.array([reg_params.get(p, (0.0, 0.0, False))[2] for p in products_by_entity], dtype=bool)
+    season_phase = np.array([SEASONALITY_PHASE.get(p, 0.0) for p in products_by_entity], dtype=float)
 
     last_our_prices = np.zeros(n_entities)
-    last_comp_prices = np.zeros(n_entities)
+    last_comp_1_prices = np.zeros(n_entities)
+    last_comp_2_prices = np.zeros(n_entities)
     last_sales = np.zeros(n_entities)
     sales_buffer = np.zeros((7, n_entities))
 
@@ -245,7 +271,8 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
         hist = sim_df[mask]
         if not hist.empty:
             last_our_prices[i] = float(hist['our_price'].iloc[-1])
-            last_comp_prices[i] = float(hist['competitor_price'].iloc[-1])
+            last_comp_1_prices[i] = float(hist.get('competitor_1_price', hist['competitor_price']).iloc[-1])
+            last_comp_2_prices[i] = float(hist.get('competitor_2_price', hist['competitor_price']).iloc[-1])
             last_sales[i] = float(hist['sales'].iloc[-1])
             hs_vals = hist['sales'].values
             if len(hs_vals) >= 7:
@@ -264,14 +291,22 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     hierarchy_values = {col: np.tile(entities_df[col].to_numpy(), n_steps) for col in hierarchy_cols}
     
     out_our_prices = np.zeros((n_steps, n_entities))
+    out_comp_1_prices = np.zeros((n_steps, n_entities))
+    out_comp_2_prices = np.zeros((n_steps, n_entities))
     out_comp_prices = np.zeros((n_steps, n_entities))
     out_sales = np.zeros((n_steps, n_entities))
     out_revenue = np.zeros((n_steps, n_entities))
     out_profit = np.zeros((n_steps, n_entities))
     out_cogs = np.tile(cogs, (n_steps, 1))
+    out_oos = np.zeros((n_steps, n_entities), dtype=bool)
+    aggressive_mask = rng.random(n_entities) < 0.45
 
     for step in range(n_steps):
         rec_prices = np.zeros(n_entities)
+        day_of_year = pd.Timestamp(date_range[step]).dayofyear
+        seasonal_multiplier = 1.0 + 0.16 * np.sin((2 * np.pi / 365.0) * day_of_year + season_phase)
+        seasonal_multiplier = np.maximum(0.2, seasonal_multiplier)
+        seasonal_base_sales = np.maximum(0.0, base_sales * seasonal_multiplier)
         
         if method == 'rules':
             # Для правил нужно опираться на среднее за последние 7 дней
@@ -279,7 +314,9 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
             for i, p in enumerate(products_by_entity):
                 row_mock = pd.Series({
                     'our_price': last_our_prices[i],
-                    'competitor_price': last_comp_prices[i],
+                    'competitor_1_price': last_comp_1_prices[i],
+                    'competitor_2_price': last_comp_2_prices[i],
+                    'competitor_price': min(last_comp_1_prices[i], last_comp_2_prices[i]),
                     'sales': last_sales[i]
                 })
                 rp, _ = apply_rules(row_mock, avg7[i])
@@ -288,9 +325,16 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
             for i, p in enumerate(products_by_entity):
                 rec_prices[i] = prices_map.get(p, last_our_prices[i])
 
-        comp_base = base_prices * 1.03
-        noise_comp = rng.normal(0, 0.015 * base_prices, size=n_entities)
-        competitor_prices = calc_competitor_prices(last_comp_prices, comp_base, last_our_prices, noise_comp)
+        comp1_base = base_prices * 1.03
+        comp2_base = base_prices * 0.93
+        noise_comp_1 = rng.normal(0, 0.015 * base_prices, size=n_entities)
+        noise_comp_2 = rng.normal(0, 0.020 * base_prices, size=n_entities)
+        chaos_step = aggressive_mask & (rng.random(n_entities) < 0.15)
+        competitor_1_prices = calc_competitor_1_prices(last_comp_1_prices, comp1_base, last_our_prices, noise_comp_1)
+        competitor_2_prices = calc_competitor_2_prices(
+            last_comp_2_prices, comp2_base, base_prices * 0.90, noise_comp_2, chaos_step
+        )
+        competitor_prices = np.minimum(competitor_1_prices, competitor_2_prices)
         
         new_sales = np.zeros(n_entities)
         
@@ -306,24 +350,29 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
             # Откат на эвристику (ненадежная регрессия)
             invalid_mask = ~valid_mask
             if invalid_mask.any():
-                noise_rules = rng.normal(0, np.maximum(2.0, 0.08 * base_sales[invalid_mask]))
+                noise_rules = rng.normal(0, np.maximum(2.0, 0.08 * seasonal_base_sales[invalid_mask]))
                 new_sales[invalid_mask] = calc_demand_rules(
                     rec_prices[invalid_mask], competitor_prices[invalid_mask], base_prices[invalid_mask],
-                    base_sales[invalid_mask], elasticities[invalid_mask], noise_rules
+                    seasonal_base_sales[invalid_mask], elasticities[invalid_mask], noise_rules
                 )
+            # Для регрессионной ветки также учитываем сезонный множитель спроса.
+            new_sales = np.maximum(0.0, np.round(new_sales * seasonal_multiplier))
         else:
             # Чистая эвристика
-            noise = rng.normal(0, np.maximum(2.0, 0.08 * base_sales), size=n_entities)
+            noise = rng.normal(0, np.maximum(2.0, 0.08 * seasonal_base_sales), size=n_entities)
             new_sales = calc_demand_rules(
-                rec_prices, competitor_prices, base_prices, base_sales, elasticities, noise
+                rec_prices, competitor_prices, base_prices, seasonal_base_sales, elasticities, noise
             )
+        oos_mask = rng.random(n_entities) < 0.05
+        new_sales[oos_mask] = 0.0
 
         revenue = np.round(new_sales * rec_prices, 2)
         profit = np.round(revenue - new_sales * cogs, 2)
         
         # Обновляем state
         last_our_prices = rec_prices.copy()
-        last_comp_prices = competitor_prices.copy()
+        last_comp_1_prices = competitor_1_prices.copy()
+        last_comp_2_prices = competitor_2_prices.copy()
         last_sales = new_sales.copy()
         
         sales_buffer[:-1, :] = sales_buffer[1:, :]
@@ -331,10 +380,13 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
         
         # Сохраняем в матрицы шага
         out_our_prices[step, :] = rec_prices
+        out_comp_1_prices[step, :] = competitor_1_prices
+        out_comp_2_prices[step, :] = competitor_2_prices
         out_comp_prices[step, :] = competitor_prices
         out_sales[step, :] = new_sales
         out_revenue[step, :] = revenue
         out_profit[step, :] = profit
+        out_oos[step, :] = oos_mask
 
     # Собираем результат воедино
     new_data = {
@@ -342,7 +394,10 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
         'product_id': all_ids,
         'product': all_names,
         'our_price': out_our_prices.flatten(),
+        'competitor_1_price': out_comp_1_prices.flatten(),
+        'competitor_2_price': out_comp_2_prices.flatten(),
         'competitor_price': out_comp_prices.flatten(),
+        'is_oos': out_oos.flatten(),
         'sales': out_sales.flatten(),
         'revenue': out_revenue.flatten(),
         'cogs': out_cogs.flatten(),

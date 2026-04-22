@@ -1,5 +1,34 @@
 import numpy as np
 
+def calc_competitor_1_prices(
+    last_comp_prices: np.ndarray,
+    comp_base_prices: np.ndarray,
+    our_prices: np.ndarray,
+    noise: np.ndarray
+) -> np.ndarray:
+    """
+    Конкурент 1 (follower): плавно подтягивается к нашей цене.
+    """
+    new_comp_prices = 0.65 * last_comp_prices + 0.20 * comp_base_prices + 0.15 * our_prices + noise
+    return np.round(np.maximum(1.0, new_comp_prices), 2)
+
+
+def calc_competitor_2_prices(
+    last_comp_prices: np.ndarray,
+    comp_base_prices: np.ndarray,
+    low_anchor_prices: np.ndarray,
+    noise: np.ndarray,
+    chaotic_mask: np.ndarray
+) -> np.ndarray:
+    """
+    Конкурент 2 (aggressor): часть SKU ведет себя хаотично, часть держит низкий anchor.
+    """
+    low_mode = 0.82 * low_anchor_prices + 0.18 * last_comp_prices + 0.5 * noise
+    chaotic_mode = 0.40 * last_comp_prices + 0.60 * comp_base_prices + 1.2 * noise
+    new_comp_prices = np.where(chaotic_mask, chaotic_mode, low_mode)
+    return np.round(np.maximum(1.0, new_comp_prices), 2)
+
+
 def calc_competitor_prices(
     last_comp_prices: np.ndarray, 
     comp_base_prices: np.ndarray, 

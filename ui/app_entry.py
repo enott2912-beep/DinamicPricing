@@ -272,7 +272,22 @@ def main() -> None:
         st.stop()
 
     st.sidebar.divider()
-    product_list = sorted(list(df["product"].unique()))
+    store_list = sorted(list(df["store"].unique())) if "store" in df.columns else []
+    selected_store = st.sidebar.selectbox("Магазин", ["Все магазины"] + store_list) if store_list else "Все магазины"
+    df_scope = df.copy()
+    if selected_store != "Все магазины":
+        df_scope = df_scope[df_scope["store"] == selected_store].copy()
+
+    brand_list = sorted(list(df_scope["brand"].unique())) if "brand" in df_scope.columns else []
+    selected_brand = st.sidebar.selectbox("Бренд", ["Все бренды"] + brand_list) if brand_list else "Все бренды"
+    if selected_brand != "Все бренды":
+        df_scope = df_scope[df_scope["brand"] == selected_brand].copy()
+
+    if df_scope.empty:
+        st.warning("По выбранным фильтрам Магазин/Бренд нет данных. Измените фильтры в сайдбаре.")
+        st.stop()
+
+    product_list = sorted(list(df_scope["product"].unique()))
     sidebar_products = ["Все товары"] + product_list
     selected_product = st.sidebar.selectbox(
         "Выберите товар",
@@ -281,10 +296,12 @@ def main() -> None:
     )
     nav = st.sidebar.radio("Раздел", ["📊 Обзор", "💡 Рекомендации", "🔮 Симуляция"])
 
-    get_product_df_with_period(df, selected_product)
+    get_product_df_with_period(df_scope, selected_product)
     forecast_ctx = (
-        df_fingerprint(df),
+        df_fingerprint(df_scope),
         use_uploaded_data,
+        selected_store,
+        selected_brand,
         selected_product,
         str(st.session_state.get("ov_range_start")) if st.session_state.get("ov_range_start") else None,
         str(st.session_state.get("ov_range_end")) if st.session_state.get("ov_range_end") else None,
@@ -296,8 +313,8 @@ def main() -> None:
         st.session_state.pop("sim_last", None)
 
     if nav == "📊 Обзор":
-        render_overview_tab(df, selected_product)
+        render_overview_tab(df_scope, selected_product)
     elif nav == "💡 Рекомендации":
-        render_recommendations_tab(df, selected_product)
+        render_recommendations_tab(df_scope, selected_product)
     elif nav == "🔮 Симуляция":
-        render_simulation_tab(df, selected_product)
+        render_simulation_tab(df_scope, selected_product)

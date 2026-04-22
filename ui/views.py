@@ -219,7 +219,7 @@ def render_welcome_screen() -> None:
             <div class="welcome-card">
                 <div class="welcome-step">
                     <strong>Способ 1 — свой файл:</strong> колонки
-                    <code class="theme-code">date, product_id, product, our_price, competitor_price, sales, revenue, cogs, profit</code>
+                    <code class="theme-code">date, store_id, store, store_profile, brand_id, brand, product_id, product, our_price, competitor_1_price, competitor_2_price, competitor_price, is_oos, sales, revenue, cogs, profit</code>
                 </div>
                 <div class="welcome-step">
                     <strong>Способ 2 — без файла:</strong> в боковой панели задайте число дней и нажмите
@@ -273,6 +273,18 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
     c1.metric("Средняя цена", f"{prod_df['our_price'].mean():.2f} ₽")
     c2.metric("Общие продажи", f"{prod_df['sales'].sum():,.0f} шт")
     c3.metric("Прибыль", f"{prod_df['profit'].sum():,.0f} ₽")
+
+    if selected_product == "Все товары" and "store" in prod_df.columns:
+        st.subheader("Рейтинг магазинов по прибыли")
+        agg_map = {"profit": "sum", "revenue": "sum", "sales": "sum"}
+        if "is_oos" in prod_df.columns:
+            agg_map["is_oos"] = "sum"
+        top_stores = prod_df.groupby("store", as_index=False).agg(agg_map).sort_values("profit", ascending=False)
+        if "is_oos" in top_stores.columns:
+            top_stores = top_stores.rename(columns={"is_oos": "oos_days"})
+        top_stores["profit"] = top_stores["profit"].round(2)
+        top_stores["revenue"] = top_stores["revenue"].round(2)
+        st.dataframe(top_stores, width='stretch', hide_index=True)
 
     st.subheader("Зависимость продаж от нашей цены")
     kind1 = st.selectbox("Тип графика", CHART_LABELS, key="ov_chart_price_sales")

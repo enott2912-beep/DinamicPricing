@@ -73,11 +73,17 @@ def _daily_price_sales_agg(prod_df: pd.DataFrame) -> pd.DataFrame:
 def _daily_prices_agg(prod_df: pd.DataFrame) -> pd.DataFrame:
     tmp = prod_df.copy()
     tmp["date"] = pd.to_datetime(tmp["date"])
-    return (
-        tmp.groupby("date", as_index=False)
-        .agg(our_price=("our_price", "mean"), competitor_price=("competitor_price", "mean"))
-        .sort_values("date")
-    )
+    agg_map = {"our_price": "mean", "competitor_price": "mean"}
+    if "competitor_1_price" in tmp.columns:
+        agg_map["competitor_1_price"] = "mean"
+    if "competitor_2_price" in tmp.columns:
+        agg_map["competitor_2_price"] = "mean"
+    out = tmp.groupby("date", as_index=False).agg(agg_map).sort_values("date")
+    if "competitor_1_price" not in out.columns:
+        out["competitor_1_price"] = out["competitor_price"]
+    if "competitor_2_price" not in out.columns:
+        out["competitor_2_price"] = out["competitor_price"]
+    return out
 
 
 def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> None:
@@ -146,31 +152,35 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_dai
             return
         t = plot_df["date"].values
         p1 = plot_df["our_price"].values
-        p2 = plot_df["competitor_price"].values
+        p2 = plot_df["competitor_1_price"].values
+        p3 = plot_df["competitor_2_price"].values
     else:
         t = prod_df["date"].values
         p1 = prod_df["our_price"].values
-        p2 = prod_df["competitor_price"].values
+        p2 = prod_df["competitor_1_price"].values if "competitor_1_price" in prod_df.columns else prod_df["competitor_price"].values
+        p3 = prod_df["competitor_2_price"].values if "competitor_2_price" in prod_df.columns else prod_df["competitor_price"].values
 
     if kind == "Точечный":
-        l1, l2 = (
-            ("Наша цена (средняя по SKU за день)", "Конкурент (средняя по SKU за день)")
+        l1, l2, l3 = (
+            ("Наша цена (средняя по SKU за день)", "Конкурент 1 (средняя)", "Конкурент 2 (средняя)")
             if use_daily
-            else ("Наша цена", "Цена конкурента")
+            else ("Наша цена", "Цена конкурента 1", "Цена конкурента 2")
         )
         ax.scatter(t, p1, label=l1, alpha=0.8, c="#1f77b4")
         ax.scatter(t, p2, label=l2, alpha=0.6, c="#ff7f0e", marker="s")
+        ax.scatter(t, p3, label=l3, alpha=0.6, c="#2ca02c", marker="^")
         ax.set_ylabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
         ax.legend()
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
     elif kind == "Линейный":
-        l1, l2 = (
-            ("Наша цена (средняя по SKU за день)", "Конкурент (средняя по SKU за день)")
+        l1, l2, l3 = (
+            ("Наша цена (средняя по SKU за день)", "Конкурент 1 (средняя)", "Конкурент 2 (средняя)")
             if use_daily
-            else ("Наша цена", "Цена конкурента")
+            else ("Наша цена", "Цена конкурента 1", "Цена конкурента 2")
         )
         ax.plot(t, p1, label=l1, marker=".", alpha=0.8)
-        ax.plot(t, p2, label=l2, ls="--", alpha=0.6)
+        ax.plot(t, p2, label=l2, ls="--", alpha=0.7)
+        ax.plot(t, p3, label=l3, ls=":", alpha=0.8)
         ax.set_ylabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
         ax.legend()
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
@@ -186,24 +196,30 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_dai
                 freq, freq_name, label_fmt = "W", "по неделям", "%m-%d"
             else:
                 freq, freq_name, label_fmt = "ME", "по месяцам", "%Y-%m"
-            df_agg = df_copy.groupby(pd.Grouper(key="date", freq=freq)).agg(
-                {"our_price": "mean", "competitor_price": "mean"}
-            ).dropna()
+            agg_map = {"our_price": "mean", "competitor_price": "mean"}
+            if "competitor_1_price" in df_copy.columns:
+                agg_map["competitor_1_price"] = "mean"
+            if "competitor_2_price" in df_copy.columns:
+                agg_map["competitor_2_price"] = "mean"
+            df_agg = df_copy.groupby(pd.Grouper(key="date", freq=freq)).agg(agg_map).dropna()
             if len(df_agg) == 0:
                 ax.text(0.5, 0.5, "Недостаточно данных", ha="center", va="center", transform=ax.transAxes)
                 return
             x = np.arange(len(df_agg))
             p1_agg = df_agg["our_price"].values
-            p2_agg = df_agg["competitor_price"].values
+            p2_agg = df_agg["competitor_1_price"].values if "competitor_1_price" in df_agg.columns else df_agg["competitor_price"].values
+            p3_agg = df_agg["competitor_2_price"].values if "competitor_2_price" in df_agg.columns else df_agg["competitor_price"].values
             date_labels = [d.strftime(label_fmt) for d in df_agg.index]
-            ax.bar(x - 0.2, p1_agg, width=0.4, label="Наша цена (средняя)", alpha=0.8)
-            ax.bar(x + 0.2, p2_agg, width=0.4, label="Конкурент (средний)", alpha=0.8)
+            ax.bar(x - 0.25, p1_agg, width=0.25, label="Наша цена (средняя)", alpha=0.8)
+            ax.bar(x, p2_agg, width=0.25, label="Конкурент 1 (средний)", alpha=0.8)
+            ax.bar(x + 0.25, p3_agg, width=0.25, label="Конкурент 2 (средний)", alpha=0.8)
             ax.set_title(f"Средние цены (сгруппировано {freq_name})", fontsize=9)
         else:
             x = np.arange(n)
-            w = 0.35
-            ax.bar(x - w / 2, p1, width=w, label="Наша цена", alpha=0.8)
-            ax.bar(x + w / 2, p2, width=w, label="Конкурент", alpha=0.8)
+            w = 0.25
+            ax.bar(x - w, p1, width=w, label="Наша цена", alpha=0.8)
+            ax.bar(x, p2, width=w, label="Конкурент 1", alpha=0.8)
+            ax.bar(x + w, p3, width=w, label="Конкурент 2", alpha=0.8)
             date_labels = [pd.Timestamp(ti).strftime("%m-%d") for ti in t]
 
         ax.set_xticks(x)
@@ -221,7 +237,8 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_dai
     elif kind == "Гистограмма":
         bins = min(15, max(5, len(prod_df) // 2))
         ax.hist(p1, bins=bins, alpha=0.7, label="Наша цена", color="#1f77b4")
-        ax.hist(p2, bins=bins, alpha=0.5, label="Конкурент", color="#ff7f0e")
+        ax.hist(p2, bins=bins, alpha=0.5, label="Конкурент 1", color="#ff7f0e")
+        ax.hist(p3, bins=bins, alpha=0.4, label="Конкурент 2", color="#2ca02c")
         ax.set_xlabel("Цена (₽)")
         ax.set_ylabel("Число дней")
         ax.legend()

@@ -22,7 +22,8 @@ REQUIRED_COLS = {
     "profit",
 }
 
-NUMERIC_COLS = ["our_price", "competitor_price", "sales", "revenue", "cogs", "profit"]
+OPTIONAL_NUMERIC_COLS = ["competitor_1_price", "competitor_2_price"]
+NUMERIC_COLS = ["our_price", "competitor_price", "sales", "revenue", "cogs", "profit"] + OPTIONAL_NUMERIC_COLS
 
 
 def _cleanup_data_files_on_exit() -> None:
@@ -61,6 +62,8 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
         return None
 
     for col in NUMERIC_COLS:
+        if col not in out.columns:
+            continue
         out[col] = pd.to_numeric(out[col], errors="coerce")
         if out[col].isna().any():
             st.error(f"В колонке `{col}` есть нечисловые или пустые значения.")
@@ -98,7 +101,12 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
         )
         return None
 
-    return out.sort_values(["date", "product"]).reset_index(drop=True)
+    if "is_oos" in out.columns:
+        out["is_oos"] = out["is_oos"].astype(bool)
+    sort_cols = [c for c in ["date", "store", "brand", "product"] if c in out.columns]
+    if not sort_cols:
+        sort_cols = ["date", "product"]
+    return out.sort_values(sort_cols).reset_index(drop=True)
 
 
 @st.cache_data
@@ -121,10 +129,18 @@ def clear_predict_file(columns: list[str] | None = None) -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     cols = columns or [
         "date",
+        "store_id",
+        "store",
+        "store_profile",
+        "brand_id",
+        "brand",
         "product_id",
         "product",
         "our_price",
+        "competitor_1_price",
+        "competitor_2_price",
         "competitor_price",
+        "is_oos",
         "sales",
         "revenue",
         "cogs",
@@ -145,7 +161,10 @@ def save_predict_file(df: pd.DataFrame) -> None:
         out = out[out["date"].notna()].copy()
     if out.empty:
         return
-    out = out.sort_values(["date", "product"]).reset_index(drop=True)
+    sort_cols = [c for c in ["date", "store", "brand", "product"] if c in out.columns]
+    if not sort_cols:
+        sort_cols = ["date", "product"]
+    out = out.sort_values(sort_cols).reset_index(drop=True)
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
     out.to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()
@@ -162,4 +181,7 @@ def load_predict_data() -> pd.DataFrame | None:
     if "date" in pred_df.columns:
         pred_df["date"] = pd.to_datetime(pred_df["date"], errors="coerce")
         pred_df = pred_df[pred_df["date"].notna()].copy()
-    return pred_df.sort_values(["date", "product"]).reset_index(drop=True)
+    sort_cols = [c for c in ["date", "store", "brand", "product"] if c in pred_df.columns]
+    if not sort_cols:
+        sort_cols = ["date", "product"]
+    return pred_df.sort_values(sort_cols).reset_index(drop=True)

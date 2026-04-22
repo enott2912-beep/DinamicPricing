@@ -11,6 +11,26 @@ from model.pricing import (
 )
 
 
+def _exclude_oos_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if "is_oos" in df.columns:
+        return df[~df["is_oos"].astype(bool)].copy()
+    return df.copy()
+
+
+def _stable_profit_baseline(df: pd.DataFrame) -> float:
+    """
+    Устойчивый baseline прибыли: медиана последних валидных дней.
+    Это защищает % роста от всплесков при OOS/нулевом последнем дне.
+    """
+    clean = _exclude_oos_rows(df)
+    if clean.empty:
+        return 0.0
+    tail = clean["profit"].tail(7)
+    if tail.empty:
+        return 0.0
+    return float(tail.median())
+
+
 def get_recommendations_all_products(prod_df: pd.DataFrame, work_df: pd.DataFrame) -> dict:
     """
     Бизнес-логика расчета рекомендаций для портфеля (SRP: отделено от UI).
@@ -33,13 +53,17 @@ def get_recommendations_all_products(prod_df: pd.DataFrame, work_df: pd.DataFram
         if sub.empty:
             continue
             
-        last_i = sub.iloc[-1]
-        prev = sub["sales"].iloc[:-1]
+        sub_valid = _exclude_oos_rows(sub)
+        if sub_valid.empty:
+            continue
+        last_i = sub_valid.iloc[-1]
+        prev = sub_valid["sales"].iloc[:-1]
         avg7 = float(prev.tail(7).mean()) if len(prev) > 0 else float(last_i["sales"])
+        current_profit = _stable_profit_baseline(sub_valid)
         rp, rn = apply_rules(last_i, avg7)
         
-        fc_r = forecast(p, rp, float(last_i["profit"]))
-        total_profit_actual += float(last_i["profit"])
+        fc_r = forecast(p, rp, current_profit)
+        total_profit_actual += current_profit
         total_pred_rules += float(fc_r["forecast_profit"])
         rec_prices_rules.append(rp)
         
@@ -53,7 +77,7 @@ def get_recommendations_all_products(prod_df: pd.DataFrame, work_df: pd.DataFram
         })
 
         a_i, b_i, opt_i, rel_i = fit_regression(prod_df, p)
-        fc_g = forecast(p, opt_i, float(last_i["profit"]), regression_params=(a_i, b_i))
+        fc_g = forecast(p, opt_i, current_profit, regression_params=(a_i, b_i))
         
         total_pred_reg += float(fc_g["forecast_profit"])
         opts.append(opt_i)
@@ -93,15 +117,17 @@ def get_recommendations_single_product(prod_df: pd.DataFrame, work_df: pd.DataFr
     """
     Бизнес-логика расчета рекомендаций для одного товара (SRP).
     """
-    last_row = work_df.iloc[-1]
-    prev_sales = work_df["sales"].iloc[:-1]
+    valid_df = _exclude_oos_rows(work_df)
+    last_row = valid_df.iloc[-1] if not valid_df.empty else work_df.iloc[-1]
+    prev_sales = valid_df["sales"].iloc[:-1] if len(valid_df) > 1 else work_df["sales"].iloc[:-1]
     avg7 = prev_sales.tail(7).mean() if len(prev_sales) > 0 else last_row["sales"]
+    current_profit = _stable_profit_baseline(valid_df if not valid_df.empty else work_df)
 
     rec_price_rules, rule_name = apply_rules(last_row, avg7)
-    fc_rules = forecast(selected_product, rec_price_rules, float(last_row["profit"]))
+    fc_rules = forecast(selected_product, rec_price_rules, current_profit)
 
     a, b, opt_price_reg, is_reg_reliable = fit_regression(prod_df, selected_product)
-    fc_reg = forecast(selected_product, opt_price_reg, float(last_row["profit"]), regression_params=(a, b))
+    fc_reg = forecast(selected_product, opt_price_reg, current_profit, regression_params=(a, b))
 
     return {
         "last_row": last_row,
