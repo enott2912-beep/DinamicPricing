@@ -219,6 +219,11 @@ def simulate(
     Запускает циклическую симуляцию рынка векторно (NumPy-based).
     """
     sim_df = df.copy()
+    history_days = int(sim_df["date"].nunique()) if "date" in sim_df.columns and len(sim_df) > 0 else 0
+    if history_days > 0:
+        train_window_days = int(np.clip(int(train_window_days), 1, history_days))
+    else:
+        train_window_days = 1
     
     if target_product and target_product != "Все товары":
         present_products = [target_product]

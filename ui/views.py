@@ -495,6 +495,9 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
             "Вы можете изменить его в календаре на вкладке '📊 Обзор'."
         )
 
+    _, prod_df_period = get_product_df_with_period(df, selected_product)
+    available_days = int(prod_df_period["date"].nunique()) if not prod_df_period.empty else 0
+
     col1, col2 = st.columns(2)
     n_steps = col1.slider("Горизонт симуляции (дней)", 7, 30, 14)
     method = col2.selectbox("Метод принятия решений", ["regression", "rules"])
@@ -507,11 +510,36 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
         )
         cfg1, cfg2, cfg3 = st.columns(3)
         retrain_every_days = cfg1.slider("Переобучать каждые N дней", 1, 30, 7)
-        train_window_days = cfg2.slider("Окно обучения (дней)", 21, 365, 90, step=7)
+        if available_days >= 21:
+            default_window = min(90, available_days)
+            train_window_days = cfg2.slider(
+                "Окно обучения (дней)",
+                21,
+                available_days,
+                default_window,
+                step=7,
+            )
+        elif available_days >= 1:
+            train_window_days = cfg2.slider(
+                "Окно обучения (дней)",
+                1,
+                available_days,
+                available_days,
+                step=1,
+            )
+        else:
+            train_window_days = 1
+            cfg2.number_input(
+                "Окно обучения (дней)",
+                min_value=1,
+                max_value=1,
+                value=1,
+                disabled=True,
+                help="Нет доступных исторических данных для настройки окна.",
+            )
         max_daily_price_change_pct = cfg3.slider("Лимит изменения цены в день (%)", 0.5, 10.0, 2.0, step=0.5)
 
     if st.button("Запустить симуляцию", type="primary"):
-        _, prod_df_period = get_product_df_with_period(df, selected_product)
         if len(prod_df_period) < 2:
             st.error("⛔ Слишком короткий период для обучения. Выберите диапазон пошире в календаре.")
             st.stop()
