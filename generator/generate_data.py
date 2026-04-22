@@ -16,9 +16,9 @@ import pandas as pd
 import numpy as np
 
 # Импорты из центральной модели
-sys.path.append(str(Path(__file__).parent.parent))
-from model.pricing import PRODUCTS, SEED
-from model.math_engine import (
+sys.path.append(str(Path(__file__).parent.parent))  # noqa: E402
+from model.pricing import PRODUCTS, SEED  # noqa: E402
+from model.math_engine import (  # noqa: E402
     calc_competitor_1_prices,
     calc_competitor_2_prices,
     calc_demand_rules,
@@ -62,8 +62,6 @@ def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
     rng = np.random.default_rng(SEED)
 
     product_names = list(PRODUCTS.keys())
-    n_products = len(product_names)
-    n_stores = len(STORES)
     base_prices = np.array([PRODUCTS[p]['base_price'] for p in product_names])
     base_sales = np.array([PRODUCTS[p]['base_sales'] for p in product_names])
     elasticities = np.array([PRODUCTS[p]['elasticity'] for p in product_names])
@@ -222,7 +220,7 @@ def main(n_days: int = 100) -> None:
     """Точка входа."""
     np.random.seed(SEED)
     n_days = int(max(1, n_days))
-    
+
     base_dir = Path(__file__).parent.parent
     data_path = base_dir / 'data' / 'sales_history.csv'
     predict_path = base_dir / 'data' / 'predict_sales.csv'
@@ -236,7 +234,7 @@ def main(n_days: int = 100) -> None:
     save_data(df, data_path)
     # Прогнозы должны храниться отдельно и очищаться при новой генерации истории.
     pd.DataFrame(columns=df.columns).to_csv(predict_path, index=False)
-    
+
     print("\nПример данных:")
     print(df.head())
     print("\nКорреляция Цена-Продажи (должна быть < 0):")

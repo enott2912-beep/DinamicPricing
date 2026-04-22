@@ -92,7 +92,7 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
             "В CSV есть несогласованные строки: `revenue` не совпадает с `sales * our_price`."
         )
         return None
-        
+
     expected_profit = out["revenue"] - out["sales"] * out["cogs"]
     mismatch_prof = (out["profit"] - expected_profit).abs() > 0.01
     if mismatch_prof.any():

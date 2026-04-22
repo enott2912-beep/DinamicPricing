@@ -4,10 +4,6 @@ import pandas as pd
 import streamlit as st
 
 from model.pricing import (
-    apply_rules,
-    fit_regression_aggregate_daily,
-    forecast,
-    products_in_dataframe,
     simulate,
     PRODUCTS,
 )
@@ -245,7 +241,9 @@ def render_welcome_screen() -> None:
             <div class="welcome-card">
                 <div class="welcome-step">
                     <strong>Способ 1 — свой файл:</strong> колонки
-                    <code class="theme-code">date, store_id, store, store_profile, brand_id, brand, product_id, product, our_price, competitor_1_price, competitor_2_price, competitor_price, is_oos, sales, revenue, cogs, profit</code>
+                    <code class="theme-code">date, store_id, store, store_profile, brand_id, brand,
+                    product_id, product, our_price, competitor_1_price, competitor_2_price,
+                    competitor_price, is_oos, sales, revenue, cogs, profit</code>
                 </div>
                 <div class="welcome-step">
                     <strong>Способ 2 — без файла:</strong> в боковой панели задайте число дней и нажмите
@@ -381,12 +379,23 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
             st.metric("Суммарная прибыль", f"{last_row['profit']:.2f} ₽")
         with c2:
             st.subheader("Эвристика")
-            st.metric("Средняя цена (правила)", f"{res['mean_rec_rules']:.2f} ₽", f"{res['growth_rules_pct']:+.1f}% к сумме прибыли")
+            st.metric(
+                "Средняя цена (правила)",
+                f"{res['mean_rec_rules']:.2f} ₽",
+                f"{res['growth_rules_pct']:+.1f}% к сумме прибыли",
+            )
             st.caption("Правило считается **по каждому SKU**; прогноз — из PRODUCTS, затем сумма по товарам.")
         with c3:
             st.subheader("Регрессия")
-            st.metric("Средняя цена (регр.)", f"{res['mean_opt_reg']:.2f} ₽", f"{res['growth_reg_pct']:+.1f}% к сумме прибыли")
-            st.caption("Оптимум **по каждому SKU** на своей истории; % — относительно суммы фактической прибыли за день.")
+            st.metric(
+                "Средняя цена (регр.)",
+                f"{res['mean_opt_reg']:.2f} ₽",
+                f"{res['growth_reg_pct']:+.1f}% к сумме прибыли",
+            )
+            st.caption(
+                "Оптимум **по каждому SKU** на своей истории; "
+                "% — относительно суммы фактической прибыли за день."
+            )
             if not res['all_rel']:
                 st.warning(
                     "У части товаров наклон регрессии не отрицательный — для них оптимальная цена условна "
@@ -411,7 +420,6 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
         p_min = max(1.0, anchor * 0.5)
         p_max = max(p_min * 1.01, anchor * 1.5)
         prices = np.linspace(p_min, p_max, 100)
-        revenues = prices * (res['a_agg'] - res['b_agg'] * prices)
         c_val = float(work_df['cogs'].mean()) if 'cogs' in work_df.columns else 0.0
         profits = (prices - c_val) * (res['a_agg'] - res['b_agg'] * prices)
 
@@ -461,13 +469,17 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     p_min = max(1.0, anchor * 0.5)
     p_max = max(p_min * 1.01, anchor * 1.5)
     prices = np.linspace(p_min, p_max, 100)
-    
+
     comp_cogs = float(res['last_row'].get('cogs', PRODUCTS.get(selected_product, {}).get('cogs', 0.0)))
     profits = (prices - comp_cogs) * (res['a'] - res['b'] * prices)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(prices, profits, label="Прогноз прибыли", color="gray", alpha=0.5)
-    ax.axvline(res['last_row']["our_price"], color="red", ls="--", label=f"Текущая ({res['last_row']['our_price']:.2f})")
+    cur_price = res['last_row']['our_price']
+    ax.axvline(
+        cur_price, color="red", ls="--",
+        label=f"Текущая ({cur_price:.2f})",
+    )
     ax.axvline(res['opt_price_reg'], color="green", ls="-", label=f"Оптимальная ({res['opt_price_reg']:.2f})")
     ax.set_xlabel("Цена (₽)")
     ax.set_ylabel("Прогнозируемая прибыль")

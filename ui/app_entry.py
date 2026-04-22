@@ -3,7 +3,7 @@ from pathlib import Path
 
 import streamlit as st
 
-sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parent.parent))  # noqa: E402
 from generator.generate_data import main as run_data_generation
 from ui.calendars import get_product_df_with_period
 from ui.data_manager import clear_predict_file, df_fingerprint, load_data
@@ -20,8 +20,17 @@ def configure_page() -> None:
     st.markdown(
         """
         <style>
-        div[data-testid="stMetric"] { background-color: var(--secondary-background-color); border: 1px solid rgba(128, 128, 128, 0.2); padding: 15px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        div[data-testid="stMetric"] label, div[data-testid="stMetric"] [data-testid="stMetricValue"] { color: var(--text-color) !important; }
+        div[data-testid="stMetric"] {
+            background-color: var(--secondary-background-color);
+            border: 1px solid rgba(128, 128, 128, 0.2);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+            color: var(--text-color) !important;
+        }
 
         .welcome-card {
             background-color: var(--secondary-background-color);

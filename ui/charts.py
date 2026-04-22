@@ -34,7 +34,6 @@ def render_stored_simulation(sim_last: dict) -> None:
     st.pyplot(fig)
     plt.close(fig)
 
-    avg_hist = sim_last["avg_hist"]
     avg_sim = sim_last["avg_sim"]
     delta = sim_last["delta"]
     first_day_rev = sim_last["first_day_rev"]
@@ -157,8 +156,10 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_dai
     else:
         t = prod_df["date"].values
         p1 = prod_df["our_price"].values
-        p2 = prod_df["competitor_1_price"].values if "competitor_1_price" in prod_df.columns else prod_df["competitor_price"].values
-        p3 = prod_df["competitor_2_price"].values if "competitor_2_price" in prod_df.columns else prod_df["competitor_price"].values
+        p2_col = "competitor_1_price" if "competitor_1_price" in prod_df.columns else "competitor_price"
+        p3_col = "competitor_2_price" if "competitor_2_price" in prod_df.columns else "competitor_price"
+        p2 = prod_df[p2_col].values
+        p3 = prod_df[p3_col].values
 
     if kind == "Точечный":
         l1, l2, l3 = (
@@ -207,8 +208,10 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_dai
                 return
             x = np.arange(len(df_agg))
             p1_agg = df_agg["our_price"].values
-            p2_agg = df_agg["competitor_1_price"].values if "competitor_1_price" in df_agg.columns else df_agg["competitor_price"].values
-            p3_agg = df_agg["competitor_2_price"].values if "competitor_2_price" in df_agg.columns else df_agg["competitor_price"].values
+            p2_col = "competitor_1_price" if "competitor_1_price" in df_agg.columns else "competitor_price"
+            p3_col = "competitor_2_price" if "competitor_2_price" in df_agg.columns else "competitor_price"
+            p2_agg = df_agg[p2_col].values
+            p3_agg = df_agg[p3_col].values
             date_labels = [d.strftime(label_fmt) for d in df_agg.index]
             ax.bar(x - 0.25, p1_agg, width=0.25, label="Наша цена (средняя)", alpha=0.8)
             ax.bar(x, p2_agg, width=0.25, label="Конкурент 1 (средний)", alpha=0.8)
