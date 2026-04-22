@@ -28,6 +28,32 @@ from ui.charts import (
 )
 from ui.data_manager import load_predict_data, save_predict_file
 
+RU_COL_MAP = {
+    "date": "Дата",
+    "store_id": "ID магазина",
+    "store": "Магазин",
+    "store_profile": "Профиль магазина",
+    "brand_id": "ID бренда",
+    "brand": "Бренд",
+    "product_id": "ID товара",
+    "product": "Товар",
+    "our_price": "Наша цена, ₽",
+    "competitor_1_price": "Цена конкурента 1, ₽",
+    "competitor_2_price": "Цена конкурента 2, ₽",
+    "competitor_price": "Цена конкурента, ₽",
+    "is_oos": "Нет в наличии",
+    "sales": "Продажи, шт",
+    "revenue": "Выручка, ₽",
+    "cogs": "Себестоимость, ₽",
+    "profit": "Прибыль, ₽",
+    "oos_days": "Дней без наличия",
+}
+
+
+def _ru_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Переименовывает технические имена колонок в русские для UI-таблиц."""
+    return df.rename(columns={c: RU_COL_MAP[c] for c in df.columns if c in RU_COL_MAP})
+
 
 def _render_welcome_demo_charts() -> None:
     """Иллюстративные графики без загрузки данных (синтетика)."""
@@ -284,7 +310,7 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
             top_stores = top_stores.rename(columns={"is_oos": "oos_days"})
         top_stores["profit"] = top_stores["profit"].round(2)
         top_stores["revenue"] = top_stores["revenue"].round(2)
-        st.dataframe(top_stores, width='stretch', hide_index=True)
+        st.dataframe(_ru_table(top_stores), width='stretch', hide_index=True)
 
     st.subheader("Зависимость продаж от нашей цены")
     kind1 = st.selectbox("Тип графика", CHART_LABELS, key="ov_chart_price_sales")
@@ -472,6 +498,17 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
     col1, col2 = st.columns(2)
     n_steps = col1.slider("Горизонт симуляции (дней)", 7, 30, 14)
     method = col2.selectbox("Метод принятия решений", ["regression", "rules"])
+    retrain_every_days = 7
+    train_window_days = 90
+    max_daily_price_change_pct = 2.0
+    if method == "regression":
+        st.caption(
+            "Для `regression` включено переобучение по скользящему окну и ограничение дневного шага цены."
+        )
+        cfg1, cfg2, cfg3 = st.columns(3)
+        retrain_every_days = cfg1.slider("Переобучать каждые N дней", 1, 30, 7)
+        train_window_days = cfg2.slider("Окно обучения (дней)", 21, 365, 90, step=7)
+        max_daily_price_change_pct = cfg3.slider("Лимит изменения цены в день (%)", 0.5, 10.0, 2.0, step=0.5)
 
     if st.button("Запустить симуляцию", type="primary"):
         _, prod_df_period = get_product_df_with_period(df, selected_product)
@@ -481,7 +518,13 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
 
         with st.spinner("Рынок просчитывается..."):
             simulated_df = simulate(
-                prod_df_period, n_steps, method, target_product=selected_product
+                prod_df_period,
+                n_steps,
+                method,
+                target_product=selected_product,
+                retrain_every_days=retrain_every_days,
+                train_window_days=train_window_days,
+                max_daily_price_change_pct=max_daily_price_change_pct,
             )
 
         if selected_product == "Все товары":
@@ -526,6 +569,9 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
             "first_day_rev": first_day_rev,
             "last_day_rev": last_day_rev,
             "future_empty": future_sim.empty,
+            "retrain_every_days": retrain_every_days,
+            "train_window_days": train_window_days,
+            "max_daily_price_change_pct": max_daily_price_change_pct,
         }
         st.session_state["sim_show_success"] = True
         st.rerun()
@@ -536,6 +582,9 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
         and sl["sim_scope"] == selected_product
         and sl["n_steps"] == n_steps
         and sl["method"] == method
+        and sl.get("retrain_every_days", 7) == retrain_every_days
+        and sl.get("train_window_days", 90) == train_window_days
+        and abs(float(sl.get("max_daily_price_change_pct", 2.0)) - float(max_daily_price_change_pct)) < 1e-9
     )
     if sl and not params_match:
         st.caption(
@@ -575,4 +624,4 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
             )
 
     pred_filtered = apply_predict_period_filter(pred_df)
-    st.dataframe(pred_filtered, use_container_width=True)
+    st.dataframe(_ru_table(pred_filtered), use_container_width=True)

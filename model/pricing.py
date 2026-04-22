@@ -206,7 +206,15 @@ def forecast(product: str, recommended_price: float, current_metric: float, regr
 # ############################################################################
 
 
-def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = None) -> pd.DataFrame:
+def simulate(
+    df: pd.DataFrame,
+    n_steps: int,
+    method: str,
+    target_product: str = None,
+    retrain_every_days: int = 7,
+    train_window_days: int = 90,
+    max_daily_price_change_pct: float = 2.0,
+) -> pd.DataFrame:
     """
     Запускает циклическую симуляцию рынка векторно (NumPy-based).
     """
@@ -220,18 +228,6 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     if not present_products:
         return sim_df
     
-    # Регрессия обучается только на переданной истории df
-    prices_map = {}
-    reg_params = {}
-    if method == 'regression':
-        for prod in present_products:
-            a, b, opt_p, is_reliable = fit_regression(df, prod)
-            reg_params[prod] = (a, b, is_reliable)
-            if not is_reliable:
-                last_price = float(df[df['product'] == prod].iloc[-1]['our_price'])
-                opt_p = last_price
-            prices_map[prod] = opt_p
-
     hierarchy_cols = [col for col in ['store_id', 'store', 'store_profile', 'brand_id', 'brand'] if col in sim_df.columns]
     entity_cols = hierarchy_cols + ['product_id', 'product'] if 'product_id' in sim_df.columns else hierarchy_cols + ['product']
     entities_df = (
@@ -253,9 +249,10 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     else:
         product_ids = np.array([PRODUCTS[p]['id'] for p in products_by_entity])
 
-    reg_a = np.array([reg_params.get(p, (0.0, 0.0, False))[0] for p in products_by_entity], dtype=float)
-    reg_b = np.array([reg_params.get(p, (0.0, 0.0, False))[1] for p in products_by_entity], dtype=float)
-    reg_rel = np.array([reg_params.get(p, (0.0, 0.0, False))[2] for p in products_by_entity], dtype=bool)
+    reg_a = np.zeros(n_entities, dtype=float)
+    reg_b = np.zeros(n_entities, dtype=float)
+    reg_rel = np.zeros(n_entities, dtype=bool)
+    reg_target_prices = np.zeros(n_entities, dtype=float)
     season_phase = np.array([SEASONALITY_PHASE.get(p, 0.0) for p in products_by_entity], dtype=float)
 
     last_our_prices = np.zeros(n_entities)
@@ -263,6 +260,9 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
     last_comp_2_prices = np.zeros(n_entities)
     last_sales = np.zeros(n_entities)
     sales_buffer = np.zeros((7, n_entities))
+    history_prices: list[np.ndarray] = [np.array([], dtype=float) for _ in range(n_entities)]
+    history_sales: list[np.ndarray] = [np.array([], dtype=float) for _ in range(n_entities)]
+    history_oos: list[np.ndarray] = [np.array([], dtype=bool) for _ in range(n_entities)]
 
     for i, entity in entities_df.iterrows():
         mask = sim_df['product'] == entity['product']
@@ -280,6 +280,13 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
             else:
                 sales_buffer[-len(hs_vals):, i] = hs_vals
                 sales_buffer[:-len(hs_vals), i] = hs_vals.mean() if len(hs_vals) > 0 else 0
+            history_prices[i] = hist['our_price'].to_numpy(dtype=float)
+            history_sales[i] = hist['sales'].to_numpy(dtype=float)
+            if 'is_oos' in hist.columns:
+                history_oos[i] = hist['is_oos'].astype(bool).to_numpy()
+            else:
+                history_oos[i] = np.zeros(len(hist), dtype=bool)
+        reg_target_prices[i] = last_our_prices[i]
 
     rng = np.random.default_rng(SEED)
     last_date = sim_df['date'].max()
@@ -322,8 +329,32 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
                 rp, _ = apply_rules(row_mock, avg7[i])
                 rec_prices[i] = rp
         else:
-            for i, p in enumerate(products_by_entity):
-                rec_prices[i] = prices_map.get(p, last_our_prices[i])
+            retrain_step = (step == 0) or (retrain_every_days > 0 and step % retrain_every_days == 0)
+            if retrain_step:
+                for i in range(n_entities):
+                    hp = history_prices[i][-train_window_days:] if train_window_days > 0 else history_prices[i]
+                    hs = history_sales[i][-train_window_days:] if train_window_days > 0 else history_sales[i]
+                    ho = history_oos[i][-len(hp):] if len(hp) > 0 else np.array([], dtype=bool)
+                    valid_mask = (~ho) & (hs > 0)
+                    if np.sum(valid_mask) >= 3:
+                        a_i, b_i, opt_i, rel_i = _fit_linear_sales_vs_price(
+                            hp[valid_mask],
+                            hs[valid_mask],
+                            float(last_our_prices[i]),
+                            float(cogs[i]),
+                        )
+                    else:
+                        a_i, b_i, opt_i, rel_i = 0.0, 0.0, float(last_our_prices[i]), False
+                    reg_a[i] = a_i
+                    reg_b[i] = b_i
+                    reg_rel[i] = rel_i
+                    target_price = float(opt_i) if rel_i else float(last_our_prices[i])
+                    # Ограничиваем дневной шаг цены, чтобы избежать нереалистичных скачков.
+                    step_limit = abs(float(max_daily_price_change_pct)) / 100.0
+                    lower = max(1.0, float(last_our_prices[i]) * (1.0 - step_limit))
+                    upper = max(lower, float(last_our_prices[i]) * (1.0 + step_limit))
+                    reg_target_prices[i] = float(np.clip(target_price, lower, upper))
+            rec_prices[:] = reg_target_prices
 
         comp1_base = base_prices * 1.03
         comp2_base = base_prices * 0.93
@@ -387,6 +418,15 @@ def simulate(df: pd.DataFrame, n_steps: int, method: str, target_product: str = 
         out_revenue[step, :] = revenue
         out_profit[step, :] = profit
         out_oos[step, :] = oos_mask
+        for i in range(n_entities):
+            history_prices[i] = np.append(history_prices[i], rec_prices[i])
+            history_sales[i] = np.append(history_sales[i], new_sales[i])
+            history_oos[i] = np.append(history_oos[i], bool(oos_mask[i]))
+            keep_len = max(14, train_window_days * 2)
+            if len(history_prices[i]) > keep_len:
+                history_prices[i] = history_prices[i][-keep_len:]
+                history_sales[i] = history_sales[i][-keep_len:]
+                history_oos[i] = history_oos[i][-keep_len:]
 
     # Собираем результат воедино
     new_data = {
