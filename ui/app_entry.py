@@ -6,7 +6,7 @@ import streamlit as st
 sys.path.append(str(Path(__file__).parent.parent))  # noqa: E402
 from generator.generate_data import main as run_data_generation
 from ui.calendars import get_product_df_with_period
-from ui.data_manager import clear_predict_file, df_fingerprint, load_data
+from ui.data_manager import clear_predict_file, df_fingerprint, get_generated_mode, load_data
 from ui.views import (
     render_overview_tab,
     render_recommendations_tab,
@@ -237,6 +237,14 @@ def configure_page() -> None:
 
 def build_sidebar():
     st.sidebar.title("⚙️ Управление")
+    app_mode = st.sidebar.radio(
+        "Режим работы",
+        ["Проверенный (rules + linear)", "Тестовый (nonlinear + lightgbm)"],
+        index=0,
+        help="Проверенный режим использует базовый генератор и классические методы. "
+             "Тестовый режим включает нелинейный генератор и LightGBM.",
+    )
+    mode_key = "experimental" if "Тестовый" in app_mode else "baseline"
     uploaded_file = st.sidebar.file_uploader("Загрузить свой CSV (sales_history)", type=["csv"])
     use_uploaded_data = False
     if uploaded_file is not None:
@@ -261,24 +269,35 @@ def build_sidebar():
     )
     if st.sidebar.button("✨ Сгенерировать историю", help="Полностью перезапишет файл sales_history.csv"):
         with st.spinner("Генерация данных..."):
-            run_data_generation(int(n_generate_days))
+            run_data_generation(int(n_generate_days), mode=mode_key)
             st.cache_data.clear()
             clear_predict_file()
             st.sidebar.success("История сгенерирована!")
             st.rerun()
 
     st.sidebar.markdown("---")
-    return uploaded_file, use_uploaded_data
+    return uploaded_file, use_uploaded_data, mode_key
 
 
 def main() -> None:
     configure_page()
-    uploaded_file, use_uploaded_data = build_sidebar()
+    uploaded_file, use_uploaded_data, mode_key = build_sidebar()
     df = load_data(uploaded_file, use_uploaded=use_uploaded_data)
 
     if df is None:
         render_welcome_screen()
         st.stop()
+
+    if not use_uploaded_data:
+        data_mode = get_generated_mode()
+        if data_mode is not None and data_mode != mode_key:
+            mode_ru = "Проверенный" if mode_key == "baseline" else "Тестовый"
+            data_mode_ru = "проверенного" if data_mode == "baseline" else "тестового"
+            st.error(
+                f"Выбран {mode_ru} режим, но текущая история сгенерирована для {data_mode_ru} режима. "
+                "Нажмите «Сгенерировать историю», чтобы пересоздать данные под текущий режим."
+            )
+            st.stop()
 
     st.sidebar.divider()
     store_list = sorted(list(df["store"].unique())) if "store" in df.columns else []
@@ -309,6 +328,7 @@ def main() -> None:
     forecast_ctx = (
         df_fingerprint(df_scope),
         use_uploaded_data,
+        mode_key,
         selected_store,
         selected_brand,
         selected_product,
@@ -324,6 +344,6 @@ def main() -> None:
     if nav == "📊 Обзор":
         render_overview_tab(df_scope, selected_product)
     elif nav == "💡 Рекомендации":
-        render_recommendations_tab(df_scope, selected_product)
+        render_recommendations_tab(df_scope, selected_product, mode_key)
     elif nav == "🔮 Симуляция":
-        render_simulation_tab(df_scope, selected_product)
+        render_simulation_tab(df_scope, selected_product, mode_key)

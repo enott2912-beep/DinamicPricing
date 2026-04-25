@@ -57,17 +57,13 @@ SEASONALITY_PHASE = {
 OOS_PROBABILITY = 0.05
 
 
-def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
-    """Векторизованная генерация данных по иерархии Магазин -> Бренд -> Товар."""
-    rng = np.random.default_rng(SEED)
-
+def _build_entity_df(rng: np.random.Generator) -> pd.DataFrame:
     product_names = list(PRODUCTS.keys())
     base_prices = np.array([PRODUCTS[p]['base_price'] for p in product_names])
     base_sales = np.array([PRODUCTS[p]['base_sales'] for p in product_names])
     elasticities = np.array([PRODUCTS[p]['elasticity'] for p in product_names])
     product_ids = np.array([PRODUCTS[p]['id'] for p in product_names])
     cogs = np.array([PRODUCTS[p].get('cogs', 0.0) for p in product_names])
-
     product_cfg = {
         name: {"id": pid, "base_price": bp, "base_sales": bs, "elasticity": el, "cogs": cg}
         for name, pid, bp, bs, el, cg in zip(product_names, product_ids, base_prices, base_sales, elasticities, cogs)
@@ -81,7 +77,6 @@ def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
             brands = PRODUCT_BRANDS.get(product_name, [])
             for brand_idx, brand_name in enumerate(brands, start=1):
                 cfg = product_cfg[product_name]
-                # Бренды одного товара отличаются по спросу и чувствительности к цене.
                 brand_sales_factor = 0.86 + 0.12 * brand_idx + rng.uniform(-0.03, 0.03)
                 brand_elasticity_factor = 0.90 + 0.06 * brand_idx + rng.uniform(-0.02, 0.02)
                 adjusted_base_sales = max(5.0, cfg["base_sales"] * profile["base_sales"] * brand_sales_factor)
@@ -101,77 +96,21 @@ def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
                     "our_price_bias": profile["our_price_bias"],
                     "cogs": cfg["cogs"],
                 })
+    return pd.DataFrame(entity_rows)
 
-    entity_df = pd.DataFrame(entity_rows)
+
+def _finalize_dataframe(
+    dates: pd.DatetimeIndex,
+    entity_df: pd.DataFrame,
+    our_prices: np.ndarray,
+    competitor_1_prices: np.ndarray,
+    competitor_2_prices: np.ndarray,
+    competitor_prices: np.ndarray,
+    oos_mask: np.ndarray,
+    sales: np.ndarray,
+) -> pd.DataFrame:
+    n_days = len(dates)
     n_entities = len(entity_df)
-
-    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
-    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
-
-    base_prices_entities = entity_df["base_price"].to_numpy(dtype=float)
-    base_sales_entities = entity_df["base_sales"].to_numpy(dtype=float)
-    elasticities_entities = entity_df["elasticity"].to_numpy(dtype=float)
-
-    # Цены
-    base_price_mat = np.tile(base_prices_entities, (n_days, 1))
-    our_price_bias = entity_df["our_price_bias"].to_numpy(dtype=float)
-    our_prices = np.round(
-        base_price_mat
-        * np.tile(our_price_bias, (n_days, 1))
-        * rng.uniform(0.92, 1.08, size=(n_days, n_entities)),
-        2,
-    )
-
-    comp1_base = base_prices_entities * 1.03
-    comp2_base = base_prices_entities * 0.93
-    competitor_1_prices = np.zeros((n_days, n_entities))
-    competitor_2_prices = np.zeros((n_days, n_entities))
-    competitor_1_prices[0] = np.maximum(
-        1,
-        comp1_base + rng.normal(0, 0.02 * base_prices_entities, size=n_entities)
-    )
-    competitor_2_prices[0] = np.maximum(
-        1,
-        comp2_base + rng.normal(0, 0.03 * base_prices_entities, size=n_entities)
-    )
-    aggressive_mask = rng.random(n_entities) < 0.45
-
-    for i in range(1, n_days):
-        noise_1 = rng.normal(0, 0.015 * base_prices_entities, size=n_entities)
-        noise_2 = rng.normal(0, 0.020 * base_prices_entities, size=n_entities)
-        chaos_step = aggressive_mask & (rng.random(n_entities) < 0.15)
-        competitor_1_prices[i] = calc_competitor_1_prices(
-            competitor_1_prices[i - 1], comp1_base, our_prices[i - 1], noise_1
-        )
-        competitor_2_prices[i] = calc_competitor_2_prices(
-            competitor_2_prices[i - 1], comp2_base, base_prices_entities * 0.90, noise_2, chaos_step
-        )
-    competitor_prices = np.round((competitor_1_prices + competitor_2_prices) / 2.0, 2)
-
-    noise_scale = np.maximum(2.0, 0.08 * base_sales_entities)
-    noise_mat = np.tile(noise_scale, (n_days, 1))
-    noise = rng.normal(0, noise_mat, size=(n_days, n_entities))
-
-    elast_mat = np.tile(elasticities_entities, (n_days, 1))
-    base_sales_mat = np.tile(base_sales_entities, (n_days, 1))
-
-    day_of_year = dates.dayofyear.to_numpy(dtype=float)
-    omega = 2 * np.pi / 365.0
-    phase = np.array([SEASONALITY_PHASE.get(p, 0.0) for p in entity_df["product"].to_numpy()], dtype=float)
-    seasonal_multiplier = 1.0 + 0.16 * np.sin(day_of_year[:, None] * omega + phase[None, :])
-    seasonally_adjusted_base_sales = np.maximum(0.0, base_sales_mat * seasonal_multiplier)
-
-    sales = calc_demand_rules(
-        our_prices=our_prices,
-        competitor_prices=np.minimum(competitor_1_prices, competitor_2_prices),
-        base_prices=base_price_mat,
-        base_sales=seasonally_adjusted_base_sales,
-        elasticities=elast_mat,
-        noise=noise
-    )
-    oos_mask = rng.random((n_days, n_entities)) < OOS_PROBABILITY
-    sales[oos_mask] = 0.0
-
     revenue = np.round(sales * our_prices, 2)
     cogs_entity = entity_df["cogs"].to_numpy(dtype=float)
     cogs_mat = np.tile(cogs_entity, (n_days, 1))
@@ -205,8 +144,154 @@ def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
         'cogs': cogs_col,
         'profit': profit.flatten()
     })
-
     return df.sort_values(['date', 'store', 'brand', 'product']).reset_index(drop=True)
+
+
+def _simulate_prices(entity_df: pd.DataFrame, n_days: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    n_entities = len(entity_df)
+    base_prices_entities = entity_df["base_price"].to_numpy(dtype=float)
+    base_price_mat = np.tile(base_prices_entities, (n_days, 1))
+    our_price_bias = entity_df["our_price_bias"].to_numpy(dtype=float)
+    our_prices = np.round(
+        base_price_mat
+        * np.tile(our_price_bias, (n_days, 1))
+        * rng.uniform(0.92, 1.08, size=(n_days, n_entities)),
+        2,
+    )
+
+    comp1_base = base_prices_entities * 1.03
+    comp2_base = base_prices_entities * 0.93
+    competitor_1_prices = np.zeros((n_days, n_entities))
+    competitor_2_prices = np.zeros((n_days, n_entities))
+    competitor_1_prices[0] = np.maximum(
+        1,
+        comp1_base + rng.normal(0, 0.02 * base_prices_entities, size=n_entities)
+    )
+    competitor_2_prices[0] = np.maximum(
+        1,
+        comp2_base + rng.normal(0, 0.03 * base_prices_entities, size=n_entities)
+    )
+    aggressive_mask = rng.random(n_entities) < 0.45
+    for i in range(1, n_days):
+        noise_1 = rng.normal(0, 0.015 * base_prices_entities, size=n_entities)
+        noise_2 = rng.normal(0, 0.020 * base_prices_entities, size=n_entities)
+        chaos_step = aggressive_mask & (rng.random(n_entities) < 0.15)
+        competitor_1_prices[i] = calc_competitor_1_prices(
+            competitor_1_prices[i - 1], comp1_base, our_prices[i - 1], noise_1
+        )
+        competitor_2_prices[i] = calc_competitor_2_prices(
+            competitor_2_prices[i - 1], comp2_base, base_prices_entities * 0.90, noise_2, chaos_step
+        )
+    competitor_prices = np.round((competitor_1_prices + competitor_2_prices) / 2.0, 2)
+    return our_prices, competitor_1_prices, competitor_2_prices, competitor_prices
+
+
+def generate_all_data(n_days: int, start_date: datetime) -> pd.DataFrame:
+    """Векторизованная генерация данных по иерархии Магазин -> Бренд -> Товар."""
+    rng = np.random.default_rng(SEED)
+
+    entity_df = _build_entity_df(rng)
+    n_entities = len(entity_df)
+
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
+
+    base_sales_entities = entity_df["base_sales"].to_numpy(dtype=float)
+    elasticities_entities = entity_df["elasticity"].to_numpy(dtype=float)
+    base_price_mat = np.tile(entity_df["base_price"].to_numpy(dtype=float), (n_days, 1))
+    our_prices, competitor_1_prices, competitor_2_prices, competitor_prices = _simulate_prices(entity_df, n_days, rng)
+
+    noise_scale = np.maximum(2.0, 0.08 * base_sales_entities)
+    noise_mat = np.tile(noise_scale, (n_days, 1))
+    noise = rng.normal(0, noise_mat, size=(n_days, n_entities))
+
+    elast_mat = np.tile(elasticities_entities, (n_days, 1))
+    base_sales_mat = np.tile(base_sales_entities, (n_days, 1))
+
+    day_of_year = dates.dayofyear.to_numpy(dtype=float)
+    omega = 2 * np.pi / 365.0
+    phase = np.array([SEASONALITY_PHASE.get(p, 0.0) for p in entity_df["product"].to_numpy()], dtype=float)
+    seasonal_multiplier = 1.0 + 0.16 * np.sin(day_of_year[:, None] * omega + phase[None, :])
+    seasonally_adjusted_base_sales = np.maximum(0.0, base_sales_mat * seasonal_multiplier)
+
+    sales = calc_demand_rules(
+        our_prices=our_prices,
+        competitor_prices=np.minimum(competitor_1_prices, competitor_2_prices),
+        base_prices=base_price_mat,
+        base_sales=seasonally_adjusted_base_sales,
+        elasticities=elast_mat,
+        noise=noise
+    )
+    oos_mask = rng.random((n_days, n_entities)) < OOS_PROBABILITY
+    sales[oos_mask] = 0.0
+
+    return _finalize_dataframe(
+        dates,
+        entity_df,
+        our_prices,
+        competitor_1_prices,
+        competitor_2_prices,
+        competitor_prices,
+        oos_mask,
+        sales,
+    )
+
+
+def generate_all_data_nonlinear(n_days: int, start_date: datetime) -> pd.DataFrame:
+    """Нелинейный генератор для экспериментального режима LightGBM."""
+    rng = np.random.default_rng(SEED)
+    entity_df = _build_entity_df(rng)
+    n_entities = len(entity_df)
+
+    start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    dates = pd.date_range(start=start_date, periods=n_days, freq='D')
+    base_prices_entities = entity_df["base_price"].to_numpy(dtype=float)
+    base_sales_entities = entity_df["base_sales"].to_numpy(dtype=float)
+    elasticities_entities = entity_df["elasticity"].to_numpy(dtype=float)
+
+    base_price_mat = np.tile(base_prices_entities, (n_days, 1))
+    our_prices, competitor_1_prices, competitor_2_prices, competitor_prices = _simulate_prices(entity_df, n_days, rng)
+    best_comp = np.minimum(competitor_1_prices, competitor_2_prices)
+
+    day_of_year = dates.dayofyear.to_numpy(dtype=float)
+    omega = 2 * np.pi / 365.0
+    phase = np.array([SEASONALITY_PHASE.get(p, 0.0) for p in entity_df["product"].to_numpy()], dtype=float)
+    seasonal = 1.0 + 0.16 * np.sin(day_of_year[:, None] * omega + phase[None, :])
+
+    rel_price = our_prices / np.maximum(base_price_mat, 1.0)
+    comp_ratio = our_prices / np.maximum(best_comp, 1.0)
+    # Нелинейные эффекты: насыщение по цене + усиленная реакция на сильный undercut.
+    sat_effect = np.exp(-2.8 * np.maximum(rel_price - 1.0, 0.0))
+    undercut_penalty = np.where(comp_ratio > 1.08, 1.0 - 0.65 * (comp_ratio - 1.08) ** 2, 1.0)
+    undercut_penalty = np.clip(undercut_penalty, 0.45, 1.15)
+    # Взаимодействие цена x сезон.
+    season_price_inter = 1.0 - 0.18 * np.maximum(rel_price - 1.0, 0.0) * np.maximum(seasonal - 1.0, 0.0)
+    season_price_inter = np.clip(season_price_inter, 0.6, 1.2)
+
+    linear_core = (
+        base_sales_entities[None, :]
+        - elasticities_entities[None, :] * (our_prices - base_price_mat)
+        - 0.5 * elasticities_entities[None, :] * (our_prices - best_comp)
+    )
+    nonlinear_sales = np.maximum(0.0, linear_core) * seasonal * sat_effect * undercut_penalty * season_price_inter
+    noise_scale = np.maximum(2.0, 0.09 * base_sales_entities)
+    noise = rng.normal(0, np.tile(noise_scale, (n_days, 1)), size=(n_days, n_entities))
+    sales = np.maximum(0.0, np.round(nonlinear_sales + noise))
+
+    oos_mask = rng.random((n_days, n_entities)) < OOS_PROBABILITY
+    sales[oos_mask] = 0.0
+    competitor_prices = np.round(competitor_prices, 2)
+
+    return _finalize_dataframe(
+        dates,
+        entity_df,
+        our_prices,
+        competitor_1_prices,
+        competitor_2_prices,
+        competitor_prices,
+        oos_mask,
+        sales,
+    )
 
 
 def save_data(df: pd.DataFrame, path: Path) -> None:
@@ -216,7 +301,7 @@ def save_data(df: pd.DataFrame, path: Path) -> None:
     print(f"Данные сохранены: {path.absolute()}")
 
 
-def main(n_days: int = 100) -> None:
+def main(n_days: int = 100, mode: str = "basic") -> None:
     """Точка входа."""
     np.random.seed(SEED)
     n_days = int(max(1, n_days))
@@ -224,14 +309,21 @@ def main(n_days: int = 100) -> None:
     base_dir = Path(__file__).parent.parent
     data_path = base_dir / 'data' / 'sales_history.csv'
     predict_path = base_dir / 'data' / 'predict_sales.csv'
+    mode_path = base_dir / 'data' / 'generation_mode.txt'
 
     # Каждый запуск генератора полностью перезаписывает историю.
     end_date = datetime.today().replace(hour=0, minute=0, second=0, microsecond=0)
     start_date = end_date - timedelta(days=n_days - 1)
-    print(f"Полная перегенерация истории за {n_days} дней...")
-    df = generate_all_data(n_days, start_date)
+    mode = (mode or "basic").strip().lower()
+    print(f"Полная перегенерация истории за {n_days} дней... (режим: {mode})")
+    if mode == "experimental":
+        df = generate_all_data_nonlinear(n_days, start_date)
+    else:
+        df = generate_all_data(n_days, start_date)
 
     save_data(df, data_path)
+    mode_path.parent.mkdir(parents=True, exist_ok=True)
+    mode_path.write_text("experimental" if mode == "experimental" else "baseline", encoding="utf-8")
     # Прогнозы должны храниться отдельно и очищаться при новой генерации истории.
     pd.DataFrame(columns=df.columns).to_csv(predict_path, index=False)
 

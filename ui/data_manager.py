@@ -9,6 +9,7 @@ BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
 PREDICT_PATH = DATA_DIR / "predict_sales.csv"
 SALES_HISTORY_PATH = DATA_DIR / "sales_history.csv"
+GEN_MODE_PATH = DATA_DIR / "generation_mode.txt"
 
 REQUIRED_COLS = {
     "date",
@@ -148,6 +149,17 @@ def clear_predict_file(columns: list[str] | None = None) -> None:
     ]
     pd.DataFrame(columns=cols).to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()
+
+
+def get_generated_mode() -> str | None:
+    """Возвращает режим последней генерации: baseline | experimental."""
+    if not GEN_MODE_PATH.exists():
+        return None
+    try:
+        mode = GEN_MODE_PATH.read_text(encoding="utf-8").strip().lower()
+        return mode or None
+    except OSError:
+        return None
 
 
 def save_predict_file(df: pd.DataFrame) -> None:

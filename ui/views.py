@@ -51,6 +51,64 @@ def _ru_table(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns={c: RU_COL_MAP[c] for c in df.columns if c in RU_COL_MAP})
 
 
+def _disagreement_level(value_pct: float) -> str:
+    if value_pct < 10:
+        return "низкое"
+    if value_pct < 25:
+        return "среднее"
+    return "высокое"
+
+
+def _render_model_disagreement_hint(
+    *,
+    lin_price: float,
+    lgbm_price: float,
+    lin_growth_pct: float,
+    lgbm_growth_pct: float,
+    n_rows: int,
+    n_days: int,
+    unique_prices: int,
+    price_std: float,
+    nl_warnings: list[str] | None = None,
+    context_label: str = "",
+) -> None:
+    nl_warnings = nl_warnings or []
+    price_gap_pct = abs(lin_price - lgbm_price) / max(abs(lin_price), 1.0) * 100
+    growth_gap_pp = abs(lin_growth_pct - lgbm_growth_pct)
+    level = _disagreement_level(max(price_gap_pct, growth_gap_pp))
+
+    reasons: list[str] = []
+    if n_rows < 120:
+        reasons.append(f"мало наблюдений ({n_rows})")
+    if n_days < 45:
+        reasons.append(f"короткий период ({n_days} дн.)")
+    if unique_prices < 8:
+        reasons.append(f"низкая вариативность цены (уникальных цен: {unique_prices})")
+    if price_std < 1.0:
+        reasons.append(f"узкий ценовой диапазон (std={price_std:.2f})")
+    if nl_warnings:
+        reasons.append("сработали диагностические предупреждения LightGBM")
+    if not reasons:
+        reasons.append("разные допущения моделей (линейная vs нелинейная)")
+
+    ctx = f" ({context_label})" if context_label else ""
+    header = (
+        f"Расхождение моделей{ctx}: **{level}**. "
+        f"Цена: **{price_gap_pct:.1f}%**, прогноз прибыли: **{growth_gap_pp:.1f} п.п.**"
+    )
+    details = "Вероятные причины: " + "; ".join(reasons) + "."
+    advice = (
+        "Рекомендация: увеличьте период, проверьте вариативность цен, "
+        "при высоком расхождении используйте линейную как baseline."
+    )
+    if level == "высокое":
+        st.warning(f"{header}\n\n{details}\n\n{advice}")
+    elif level == "среднее":
+        st.info(f"{header}\n\n{details}\n\n{advice}")
+    else:
+        st.caption(f"{header} {details}")
+
+
 def _render_welcome_demo_charts() -> None:
     """Иллюстративные графики без загрузки данных (синтетика)."""
     rng = np.random.default_rng(42)
@@ -129,11 +187,13 @@ def render_welcome_screen() -> None:
             <h1>Динамическое ценообразование</h1>
             <p class="welcome-hero-sub">
                 Учебный прототип: загрузите историю продаж или сгенерируйте её одной кнопкой,
-                выберите товар или портфель целиком, затем изучайте метрики, рекомендации по цене и сценарный прогноз.
+                выберите режим работы (проверенный или тестовый), товар или портфель целиком,
+                затем изучайте метрики, рекомендации по цене и сценарный прогноз.
             </p>
             <div class="welcome-hero-badges">
+                <span class="welcome-pill">🧭 2 режима: baseline / experimental</span>
                 <span class="welcome-pill">📊 Обзор и календарь периода</span>
-                <span class="welcome-pill">💡 Правила и регрессия</span>
+                <span class="welcome-pill">💡 Rules / Linear / LightGBM</span>
                 <span class="welcome-pill">🔮 Симуляция выручки</span>
                 <span class="welcome-pill">📁 Свой CSV или генерация</span>
             </div>
@@ -162,8 +222,8 @@ def render_welcome_screen() -> None:
             <div class="welcome-feature-card">
                 <div class="wf-icon">💡</div>
                 <h3>Рекомендации</h3>
-                <p>Эвристики по правилам и оценка оптимальной цены через регрессию спроса;
-                сравнение сценариев роста выручки.</p>
+                <p>В проверенном режиме используются rules + линейная регрессия,
+                в тестовом — нелинейная модель LightGBM с отдельным генератором данных.</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -189,13 +249,21 @@ def render_welcome_screen() -> None:
                 <div class="welcome-timeline-row">
                     <span class="welcome-timeline-num">1</span>
                     <div class="welcome-timeline-body">
-                        <strong>Данные</strong>
-                        <span>В боковой панели загрузите CSV с историей или нажмите «Сгенерировать историю»
-                        — файл продаж будет готов к анализу.</span>
+                        <strong>Режим</strong>
+                        <span>В боковой панели выберите режим:
+                        <em>проверенный</em> (rules + linear) или <em>тестовый</em> (LightGBM).</span>
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
                     <span class="welcome-timeline-num">2</span>
+                    <div class="welcome-timeline-body">
+                        <strong>Данные</strong>
+                        <span>В боковой панели загрузите CSV с историей или нажмите «Сгенерировать историю»
+                        — файл продаж будет готов к анализу для выбранного режима.</span>
+                    </div>
+                </div>
+                <div class="welcome-timeline-row">
+                    <span class="welcome-timeline-num">3</span>
                     <div class="welcome-timeline-body">
                         <strong>Товар</strong>
                         <span>Выберите конкретный SKU или пункт «Все товары», чтобы смотреть агрегаты
@@ -203,7 +271,7 @@ def render_welcome_screen() -> None:
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
-                    <span class="welcome-timeline-num">3</span>
+                    <span class="welcome-timeline-num">4</span>
                     <div class="welcome-timeline-body">
                         <strong>Обзор</strong>
                         <span>Откройте вкладку «Обзор»: при необходимости уточните период в календаре,
@@ -211,15 +279,15 @@ def render_welcome_screen() -> None:
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
-                    <span class="welcome-timeline-num">4</span>
+                    <span class="welcome-timeline-num">5</span>
                     <div class="welcome-timeline-body">
                         <strong>Рекомендации</strong>
-                        <span>На вкладке «Рекомендации» посмотрите предложенную цену по правилам и по модели,
-                        подсказку по эластичности.</span>
+                        <span>На вкладке «Рекомендации» изучите предложенные цены в рамках выбранного режима
+                        и подсказки по качеству данных.</span>
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
-                    <span class="welcome-timeline-num">5</span>
+                    <span class="welcome-timeline-num">6</span>
                     <div class="welcome-timeline-body">
                         <strong>Симуляция</strong>
                         <span>Запустите симуляцию на вкладке «Симуляция», сравните историческую и прогнозную
@@ -247,7 +315,11 @@ def render_welcome_screen() -> None:
                 </div>
                 <div class="welcome-step">
                     <strong>Способ 2 — без файла:</strong> в боковой панели задайте число дней и нажмите
-                    <strong>«Сгенерировать историю»</strong> — будет создан учебный набор продаж.
+                    <strong>«Сгенерировать историю»</strong> — будет создан учебный набор продаж для выбранного режима.
+                </div>
+                <div class="welcome-step">
+                    <strong>Важно:</strong> при смене режима с <em>проверенного</em> на <em>тестовый</em>
+                    (и наоборот) историю нужно сгенерировать заново, чтобы модели работали на согласованных данных.
                 </div>
             </div>
             """,
@@ -327,7 +399,7 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
     plt.close(fig2)
 
 
-def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
+def render_recommendations_tab(df: pd.DataFrame, selected_product: str, app_mode: str = "baseline") -> None:
     st.title(f"💡 Рекомендации по цене: {selected_product}")
     _, prod_df = get_product_df_with_period(df, selected_product)
     if len(prod_df) == 0:
@@ -340,6 +412,17 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
         st.caption(f"Период расчета рекомендаций: **{rs}** — **{re}**")
     elif st.session_state.ov_pending_second:
         st.caption(f"Период расчета рекомендаций: с **{rs}** до последней даты в таблице.")
+    mode_experimental = app_mode == "experimental"
+    if mode_experimental:
+        enable_lgbm = st.toggle(
+            "Включить LightGBM в рекомендациях",
+            value=True,
+            help="Ускоряет интерфейс при выключенном режиме. Включайте для сравнения моделей.",
+            key="rec_enable_lgbm",
+        )
+    else:
+        enable_lgbm = False
+        st.caption("Проверенный режим: используются только эвристика и линейная регрессия.")
 
     if selected_product == "Все товары":
         work_df = (
@@ -365,13 +448,71 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
 
     last_row = work_df.iloc[-1]
 
+    if mode_experimental:
+        st.caption("Тестовый режим: показывается только нелинейная модель (LightGBM).")
+        if selected_product == "Все товары":
+            res = get_recommendations_all_products(prod_df, work_df, include_lightgbm=True)
+            if not res:
+                st.warning("В данных нет ни одного товара из каталога.")
+                st.stop()
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Текущее состояние (день)")
+                st.metric("Средняя наша цена", f"{last_row['our_price']:.2f} ₽")
+                st.metric("Средняя цена конкурента", f"{last_row['competitor_price']:.2f} ₽")
+                st.metric("Суммарная прибыль", f"{last_row['profit']:.2f} ₽")
+            with c2:
+                st.subheader("LightGBM")
+                st.metric(
+                    "Средняя цена (LGBM)",
+                    f"{res['mean_opt_nl']:.2f} ₽",
+                    f"{res['growth_nl_pct']:+.1f}% к сумме прибыли",
+                )
+                if not res.get("all_nl_rel", False):
+                    st.warning("У части SKU прогноз может быть неточным (см. колонку «Диагностика»).")
+            st.subheader("LightGBM по SKU")
+            st.dataframe(pd.DataFrame(res['nl_rows']), width='stretch', hide_index=True)
+            st.info(
+                f"👉 **Итог по портфелю (LightGBM)**: средняя рекомендованная цена {res['mean_opt_nl']:.2f} ₽, "
+                f"прогноз изменения прибыли {res['growth_nl_pct']:+.1f}%."
+            )
+            return
+
+        res = get_recommendations_single_product(prod_df, work_df, selected_product, include_lightgbm=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Текущее состояние")
+            st.metric("Наша цена", f"{res['last_row']['our_price']:.2f} ₽")
+            st.metric("Цена конкурента", f"{res['last_row']['competitor_price']:.2f} ₽")
+            st.metric("Прибыль (день)", f"{res['last_row']['profit']:.2f} ₽")
+        with c2:
+            st.subheader("LightGBM")
+            st.metric("Новая цена", f"{res['opt_price_nl']:.2f} ₽", f"{res['fc_nl']['growth_pct']:+.1f}% прибыли")
+            if res.get("nl_warnings"):
+                st.warning("Возможная неточность: " + " ".join(res["nl_warnings"]))
+            else:
+                st.caption("Качество данных достаточно для нелинейной модели.")
+        compare_rows = pd.DataFrame([
+            {"Источник": "Текущая", "Цена, ₽": round(float(res['last_row']['our_price']), 2)},
+            {"Источник": "LightGBM", "Цена, ₽": round(float(res["opt_price_nl"]), 2)},
+        ])
+        st.dataframe(compare_rows, width="stretch", hide_index=True)
+        st.info(
+            f"👉 **Итог по {selected_product} (LightGBM)**: старая цена {res['last_row']['our_price']:.2f} ₽ → "
+            f"новая цена {res['opt_price_nl']:.2f} ₽ | прогноз прибыли: {res['fc_nl']['growth_pct']:+.1f}%"
+        )
+        return
+
     if selected_product == "Все товары":
-        res = get_recommendations_all_products(prod_df, work_df)
+        res = get_recommendations_all_products(prod_df, work_df, include_lightgbm=enable_lgbm)
         if not res:
             st.warning("В данных нет ни одного товара из каталога.")
             st.stop()
 
-        c1, c2, c3 = st.columns(3)
+        if enable_lgbm:
+            c1, c2, c3, c4 = st.columns(4)
+        else:
+            c1, c2, c3 = st.columns(3)
         with c1:
             st.subheader("Текущее состояние (день)")
             st.metric("Средняя наша цена", f"{last_row['our_price']:.2f} ₽")
@@ -401,13 +542,50 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
                     "У части товаров наклон регрессии не отрицательный — для них оптимальная цена условна "
                     "(см. колонку «Надёжн.» в таблице)."
                 )
+        if enable_lgbm:
+            with c4:
+                st.subheader("LightGBM")
+                st.metric(
+                    "Средняя цена (LGBM)",
+                    f"{res['mean_opt_nl']:.2f} ₽",
+                    f"{res['growth_nl_pct']:+.1f}% к сумме прибыли",
+                )
+                st.caption("Нелинейная модель на истории SKU с диагностикой качества данных.")
+                if not res.get("all_nl_rel", False):
+                    st.warning("У части SKU прогноз может быть неточным (см. колонку «Диагностика»).")
 
         st.divider()
-        t1, t2 = st.tabs(["Эвристика по SKU", "Регрессия по SKU"])
-        with t1:
-            st.dataframe(pd.DataFrame(res['rule_rows']), width='stretch', hide_index=True)
-        with t2:
-            st.dataframe(pd.DataFrame(res['reg_rows']), width='stretch', hide_index=True)
+        if enable_lgbm:
+            t1, t2, t3 = st.tabs(["Эвристика по SKU", "Регрессия по SKU", "LightGBM по SKU"])
+            with t1:
+                st.dataframe(pd.DataFrame(res['rule_rows']), width='stretch', hide_index=True)
+            with t2:
+                st.dataframe(pd.DataFrame(res['reg_rows']), width='stretch', hide_index=True)
+            with t3:
+                st.dataframe(pd.DataFrame(res['nl_rows']), width='stretch', hide_index=True)
+        else:
+            t1, t2 = st.tabs(["Эвристика по SKU", "Регрессия по SKU"])
+            with t1:
+                st.dataframe(pd.DataFrame(res['rule_rows']), width='stretch', hide_index=True)
+            with t2:
+                st.dataframe(pd.DataFrame(res['reg_rows']), width='stretch', hide_index=True)
+
+        if enable_lgbm:
+            nl_warn_count = 0
+            if res.get("nl_rows"):
+                nl_warn_count = int(sum(1 for row in res["nl_rows"] if row.get("Диагностика") and row.get("Диагностика") != "OK"))
+            _render_model_disagreement_hint(
+                lin_price=float(res.get("mean_opt_reg", 0.0)),
+                lgbm_price=float(res.get("mean_opt_nl", 0.0)),
+                lin_growth_pct=float(res.get("growth_reg_pct", 0.0)),
+                lgbm_growth_pct=float(res.get("growth_nl_pct", 0.0)),
+                n_rows=int(len(prod_df)),
+                n_days=int(prod_df["date"].nunique()) if "date" in prod_df.columns else 0,
+                unique_prices=int(prod_df["our_price"].nunique()) if "our_price" in prod_df.columns else 0,
+                price_std=float(prod_df["our_price"].std(ddof=0)) if "our_price" in prod_df.columns and len(prod_df) > 1 else 0.0,
+                nl_warnings=[f"предупреждений LightGBM: {nl_warn_count}"] if nl_warn_count > 0 else [],
+                context_label="портфель",
+            )
 
         st.divider()
         st.subheader("Агрегированная прибыль vs средняя цена портфеля (по дням)")
@@ -425,14 +603,61 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
 
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(prices, profits, label="Прогноз прибыли (агрегат)", color="gray", alpha=0.5)
-        ax.axvline(last_row["our_price"], color="red", ls="--", label=f"Средняя сейчас ({last_row['our_price']:.2f})")
+        ax.axvline(
+            last_row["our_price"],
+            color="#d62728",
+            ls="--",
+            lw=2.0,
+            label=f"Средняя сейчас ({last_row['our_price']:.2f})",
+        )
+        ax.axvline(
+            res["mean_rec_rules"],
+            color="#1f77b4",
+            ls=":",
+            lw=2.0,
+            label=f"Эвристика ({res['mean_rec_rules']:.2f})",
+        )
+        ax.axvline(
+            res["mean_opt_reg"],
+            color="#2ca02c",
+            ls="-",
+            lw=2.3,
+            label=f"Линейная по SKU ({res['mean_opt_reg']:.2f})",
+        )
+        if enable_lgbm:
+            ax.axvline(
+                res["mean_opt_nl"],
+                color="#9467bd",
+                ls="-.",
+                lw=2.2,
+                label=f"LightGBM по SKU ({res['mean_opt_nl']:.2f})",
+            )
         if res['rel_agg'] and res['b_agg'] > 0:
-            ax.axvline(res['opt_agg'], color="green", ls="-", label=f"Оптимум агрег. ({res['opt_agg']:.2f})")
+            ax.axvline(
+                res['opt_agg'],
+                color="#111111",
+                ls=(0, (5, 3)),
+                lw=1.8,
+                label=f"Оптимум агрег. ({res['opt_agg']:.2f})",
+            )
         ax.set_xlabel("Средняя цена портфеля (₽)")
         ax.set_ylabel("Прогнозируемая прибыль (модель по дням)")
-        ax.legend()
+        ax.legend(loc="upper right", fontsize=9)
+        ax.grid(alpha=0.25)
         st.pyplot(fig)
         plt.close(fig)
+
+        compare_portfolio_rows = [
+            {"Источник": "Средняя текущая", "Цена, ₽": round(float(last_row["our_price"]), 2)},
+            {"Источник": "Эвристика (средняя по SKU)", "Цена, ₽": round(float(res["mean_rec_rules"]), 2)},
+            {"Источник": "Линейная (средняя по SKU)", "Цена, ₽": round(float(res["mean_opt_reg"]), 2)},
+        ]
+        if enable_lgbm:
+            compare_portfolio_rows.append({"Источник": "LightGBM (средняя по SKU)", "Цена, ₽": round(float(res["mean_opt_nl"]), 2)})
+        compare_portfolio_rows.append({"Источник": "Оптимум агрегированного ряда", "Цена, ₽": round(float(res["opt_agg"]), 2)})
+        compare_portfolio = pd.DataFrame(compare_portfolio_rows)
+        st.caption("Сводные цены по методам для режима «Все товары».")
+        st.dataframe(compare_portfolio, width="stretch", hide_index=True)
 
         st.info(
             f"👉 **Итог по портфелю**: суммарная прибыль последнего дня {res['total_profit_actual']:.2f} ₽ → "
@@ -441,9 +666,12 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
         )
         return
 
-    res = get_recommendations_single_product(prod_df, work_df, selected_product)
+    res = get_recommendations_single_product(prod_df, work_df, selected_product, include_lightgbm=enable_lgbm)
 
-    c1, c2, c3 = st.columns(3)
+    if enable_lgbm:
+        c1, c2, c3, c4 = st.columns(4)
+    else:
+        c1, c2, c3 = st.columns(3)
     with c1:
         st.subheader("Текущее состояние")
         st.metric("Наша цена", f"{res['last_row']['our_price']:.2f} ₽")
@@ -462,9 +690,31 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
                 "Наклон регрессии не отрицательный: оценка эластичности ненадежна, "
                 "поэтому оптимальная цена может быть неточной."
             )
+    if enable_lgbm:
+        with c4:
+            st.subheader("LightGBM")
+            st.metric("Новая цена", f"{res['opt_price_nl']:.2f} ₽", f"{res['fc_nl']['growth_pct']:+.1f}% прибыли")
+            if res.get("nl_warnings"):
+                st.warning("Возможная неточность: " + " ".join(res["nl_warnings"]))
+            else:
+                st.caption("Качество данных достаточно для нелинейной модели.")
+
+    if enable_lgbm:
+        _render_model_disagreement_hint(
+            lin_price=float(res["opt_price_reg"]),
+            lgbm_price=float(res["opt_price_nl"]),
+            lin_growth_pct=float(res["fc_reg"]["growth_pct"]),
+            lgbm_growth_pct=float(res["fc_nl"]["growth_pct"]),
+            n_rows=int(len(work_df)),
+            n_days=int(work_df["date"].nunique()) if "date" in work_df.columns else 0,
+            unique_prices=int(work_df["our_price"].nunique()) if "our_price" in work_df.columns else 0,
+            price_std=float(work_df["our_price"].std(ddof=0)) if "our_price" in work_df.columns and len(work_df) > 1 else 0.0,
+            nl_warnings=res.get("nl_warnings", []),
+            context_label=selected_product,
+        )
 
     st.divider()
-    st.subheader("Анализ эластичности прибыли (Regression)")
+    st.subheader("Сравнение рекомендованных цен")
     anchor = res['opt_price_reg'] if res['opt_price_reg'] > 0 else float(res['last_row']["our_price"])
     p_min = max(1.0, anchor * 0.5)
     p_max = max(p_min * 1.01, anchor * 1.5)
@@ -474,18 +724,54 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     profits = (prices - comp_cogs) * (res['a'] - res['b'] * prices)
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(prices, profits, label="Прогноз прибыли", color="gray", alpha=0.5)
+    ax.plot(prices, profits, label="Кривая прибыли (линейная модель)", color="#8a8a8a", alpha=0.65, lw=1.8)
     cur_price = res['last_row']['our_price']
     ax.axvline(
-        cur_price, color="red", ls="--",
+        cur_price, color="#d62728", ls="--", lw=2.0,
         label=f"Текущая ({cur_price:.2f})",
     )
-    ax.axvline(res['opt_price_reg'], color="green", ls="-", label=f"Оптимальная ({res['opt_price_reg']:.2f})")
+    ax.axvline(
+        res['rec_price_rules'],
+        color="#1f77b4",
+        ls=":",
+        lw=2.0,
+        label=f"Эвристика ({res['rec_price_rules']:.2f})",
+    )
+    ax.axvline(
+        res['opt_price_reg'],
+        color="#111111",
+        ls=(0, (5, 3)),
+        lw=2.2,
+        label=f"Оптимум линейной ({res['opt_price_reg']:.2f})",
+    )
+    if enable_lgbm:
+        ax.axvline(
+            res['opt_price_nl'],
+            color="#9467bd",
+            ls="-.",
+            lw=2.2,
+            label=f"LightGBM ({res['opt_price_nl']:.2f})",
+        )
     ax.set_xlabel("Цена (₽)")
     ax.set_ylabel("Прогнозируемая прибыль")
-    ax.legend()
+    ax.legend(loc="upper left", fontsize=9)
+    ax.grid(alpha=0.25)
     st.pyplot(fig)
     plt.close(fig)
+
+    compare_rows_data = [
+        {"Источник": "Текущая", "Цена, ₽": round(float(cur_price), 2)},
+        {"Источник": "Эвристика", "Цена, ₽": round(float(res["rec_price_rules"]), 2)},
+        {"Источник": "Линейная", "Цена, ₽": round(float(res["opt_price_reg"]), 2)},
+    ]
+    if enable_lgbm:
+        compare_rows_data.append({"Источник": "LightGBM", "Цена, ₽": round(float(res["opt_price_nl"]), 2)})
+    compare_rows = pd.DataFrame(compare_rows_data)
+    st.caption(
+        "Если линии визуально сливаются, это значит, что модели дали близкие цены. "
+        "Точные значения — в таблице ниже."
+    )
+    st.dataframe(compare_rows, width="stretch", hide_index=True)
 
     st.info(
         f"👉 **Итог по {selected_product}**: старая цена {res['last_row']['our_price']:.2f} ₽ → "
@@ -493,7 +779,7 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str) -> None:
     )
 
 
-def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
+def render_simulation_tab(df: pd.DataFrame, selected_product: str, app_mode: str = "baseline") -> None:
     st.title("🔮 Симуляция будущего")
     st.caption(
         f"Товар для прогноза: **{selected_product}** — выбирается только в боковой панели «Выберите товар»."
@@ -509,17 +795,42 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str) -> None:
 
     _, prod_df_period = get_product_df_with_period(df, selected_product)
     available_days = int(prod_df_period["date"].nunique()) if not prod_df_period.empty else 0
+    price_unique = (
+        int(prod_df_period["our_price"].nunique())
+        if "our_price" in prod_df_period.columns and not prod_df_period.empty
+        else 0
+    )
+    price_std = (
+        float(prod_df_period["our_price"].std(ddof=0))
+        if "our_price" in prod_df_period.columns and len(prod_df_period) > 1
+        else 0.0
+    )
 
     col1, col2 = st.columns(2)
     n_steps = col1.slider("Горизонт симуляции (дней)", 7, 30, 14)
-    method = col2.selectbox("Метод принятия решений", ["regression", "rules"])
+    if app_mode == "experimental":
+        method_options = ["lightgbm"]
+    else:
+        method_options = ["regression", "rules"]
+    method = col2.selectbox("Метод принятия решений", method_options)
     retrain_every_days = 7
     train_window_days = 90
     max_daily_price_change_pct = 2.0
-    if method == "regression":
+    if method in ("regression", "lightgbm"):
         st.caption(
-            "Для `regression` включено переобучение по скользящему окну и ограничение дневного шага цены."
+            "Для выбранной ML-модели включено переобучение по скользящему окну и ограничение дневного шага цены."
         )
+        if method == "lightgbm" and available_days < 60:
+            st.warning(
+                f"История короткая ({available_days} дн.): прогноз LightGBM может быть неточным. "
+                "Рекомендуется расширить период и повысить вариативность цен."
+            )
+        if method == "lightgbm" and (price_unique < 8 or price_std < 1.0):
+            st.warning(
+                "⚠️ Прогноз может быть недостаточно точным: выявлена низкая вариативность данных "
+                f"(уникальных цен: {price_unique}, std цены: {price_std:.2f}). "
+                "Для LightGBM это снижает устойчивость и качество прогноза."
+            )
         cfg1, cfg2, cfg3 = st.columns(3)
         retrain_every_days = cfg1.slider("Переобучать каждые N дней", 1, 30, 7)
         if available_days >= 21:
