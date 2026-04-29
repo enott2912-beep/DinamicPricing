@@ -65,12 +65,12 @@ def configure_page() -> None:
         }
 
         .welcome-hero {
-            background: linear-gradient(135deg, #153a7a 0%, #1f4ea8 40%, #2b6fcf 100%);
-            padding: 2rem 1.75rem 2.25rem;
+            background: linear-gradient(135deg, #183b74 0%, #2458a6 55%, #2f72cc 100%);
+            padding: 1.7rem 1.5rem 1.85rem;
             border-radius: 16px;
-            text-align: center;
-            margin-bottom: 1.75rem;
-            box-shadow: 0 12px 40px rgba(15, 40, 90, 0.35);
+            text-align: left;
+            margin-bottom: 1.35rem;
+            box-shadow: 0 8px 24px rgba(15, 40, 90, 0.24);
             border: 1px solid rgba(255, 255, 255, 0.12);
         }
         .welcome-hero h1 {
@@ -82,19 +82,17 @@ def configure_page() -> None:
         }
         .welcome-hero .welcome-hero-sub {
             margin: 0;
-            font-size: 1.05rem;
-            line-height: 1.55;
+            font-size: 0.98rem;
+            line-height: 1.48;
             color: rgba(255, 255, 255, 0.92) !important;
-            max-width: 640px;
-            margin-left: auto;
-            margin-right: auto;
+            max-width: 760px;
         }
         .welcome-hero-badges {
-            margin-top: 1.25rem;
+            margin-top: 0.9rem;
             display: flex;
             flex-wrap: wrap;
             gap: 0.5rem;
-            justify-content: center;
+            justify-content: flex-start;
         }
         .welcome-pill {
             display: inline-block;
@@ -102,59 +100,65 @@ def configure_page() -> None:
             border-radius: 999px;
             font-size: 0.8rem;
             font-weight: 600;
-            background: rgba(255, 255, 255, 0.18);
+            background: rgba(255, 255, 255, 0.16);
             color: #ffffff !important;
             border: 1px solid rgba(255, 255, 255, 0.22);
         }
 
         .welcome-section-title {
-            font-size: 1.15rem;
+            display: block;
+            font-size: 1.18rem;
             font-weight: 700;
-            margin: 2rem 0 1rem 0;
-            padding-bottom: 0.4rem;
-            border-bottom: 2px solid var(--primary-color);
+            margin: 1.75rem 0 1rem 0;
+            padding: 0.35rem 0.1rem 0.55rem 0.1rem;
+            border-bottom: 1px solid rgba(128, 128, 128, 0.28);
             color: var(--text-color);
+            letter-spacing: 0.01em;
+        }
+
+        .welcome-section-sep {
+            margin: 1.15rem 0 0.35rem 0;
+            border-top: 1px solid rgba(128, 128, 128, 0.22);
         }
 
         .welcome-feature-card {
             background: linear-gradient(180deg, var(--secondary-background-color) 0%, var(--background-color) 100%);
             border: 1px solid rgba(128, 128, 128, 0.28);
-            border-radius: 14px;
-            padding: 1.25rem 1.1rem;
-            min-height: 168px;
-            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.06);
-            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+            border-radius: 12px;
+            padding: 1.05rem 0.95rem;
+            min-height: 146px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+            transition: border-color 0.15s ease;
         }
         .welcome-feature-card:hover {
             border-color: rgba(43, 111, 207, 0.45);
-            box-shadow: 0 8px 28px rgba(31, 78, 168, 0.12);
         }
         .welcome-feature-card .wf-icon {
-            font-size: 1.75rem;
+            font-size: 1.45rem;
             line-height: 1;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.35rem;
         }
         .welcome-feature-card h3 {
             margin: 0 0 0.45rem 0;
-            font-size: 1.05rem;
+            font-size: 0.99rem;
             font-weight: 700;
             color: var(--text-color) !important;
         }
         .welcome-feature-card p {
             margin: 0;
-            font-size: 0.9rem;
-            line-height: 1.5;
+            font-size: 0.86rem;
+            line-height: 1.42;
             color: var(--text-color) !important;
             opacity: 0.92;
         }
 
         .welcome-timeline-wrap {
             background-color: var(--secondary-background-color);
-            border-radius: 14px;
+            border-radius: 12px;
             border: 1px solid rgba(128, 128, 128, 0.28);
-            padding: 1.35rem 1.25rem 0.5rem;
-            margin-bottom: 1.5rem;
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+            padding: 1rem 1rem 0.25rem;
+            margin-bottom: 1.15rem;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
         }
         .welcome-timeline {
             max-width: 760px;
@@ -164,21 +168,21 @@ def configure_page() -> None:
             display: flex;
             gap: 1rem;
             align-items: flex-start;
-            margin-bottom: 1.15rem;
+            margin-bottom: 0.95rem;
         }
         .welcome-timeline-num {
             flex-shrink: 0;
-            width: 2.35rem;
-            height: 2.35rem;
+            width: 2rem;
+            height: 2rem;
             border-radius: 50%;
             background: linear-gradient(135deg, #1f4ea8, #2b6fcf);
             color: #ffffff !important;
             font-weight: 700;
-            font-size: 0.95rem;
+            font-size: 0.86rem;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 2px 10px rgba(31, 78, 168, 0.35);
+            box-shadow: 0 2px 8px rgba(31, 78, 168, 0.25);
         }
         .welcome-timeline-body {
             flex: 1;
@@ -186,12 +190,12 @@ def configure_page() -> None:
         }
         .welcome-timeline-body strong {
             color: var(--text-color) !important;
-            font-size: 0.98rem;
+            font-size: 0.92rem;
         }
         .welcome-timeline-body span {
             display: block;
             margin-top: 0.25rem;
-            font-size: 0.88rem;
+            font-size: 0.84rem;
             line-height: 1.45;
             color: var(--text-color) !important;
             opacity: 0.88;

@@ -181,16 +181,14 @@ def render_welcome_screen() -> None:
         <div class="welcome-hero">
             <h1>Динамическое ценообразование</h1>
             <p class="welcome-hero-sub">
-                Учебный прототип: загрузите историю продаж или сгенерируйте её одной кнопкой,
-                выберите режим работы (проверенный или тестовый), товар или портфель целиком,
-                затем изучайте метрики, рекомендации по цене и сценарный прогноз.
+                Учебный прототип для оценки ценовых решений: загрузите историю продаж
+                (или сгенерируйте демо-данные), выберите режим и получите аналитический
+                обзор, рекомендации по цене и сценарный прогноз прибыли.
             </p>
             <div class="welcome-hero-badges">
-                <span class="welcome-pill">🧭 2 режима: baseline / experimental</span>
-                <span class="welcome-pill">📊 Обзор и календарь периода</span>
-                <span class="welcome-pill">💡 Rules / Linear / LightGBM</span>
-                <span class="welcome-pill">🔮 Симуляция выручки</span>
-                <span class="welcome-pill">📁 Свой CSV или генерация</span>
+                <span class="welcome-pill">🧭 2 режима: baseline и experimental</span>
+                <span class="welcome-pill">📊 Обзор, рекомендации, симуляция</span>
+                <span class="welcome-pill">📁 CSV или генерация данных в 1 клик</span>
             </div>
         </div>
         """,
@@ -236,7 +234,38 @@ def render_welcome_screen() -> None:
             unsafe_allow_html=True,
         )
 
-    st.markdown('<p class="welcome-section-title">Пошаговый сценарий</p>', unsafe_allow_html=True)
+    st.markdown('<div class="welcome-section-sep"></div>', unsafe_allow_html=True)
+    st.markdown('<p class="welcome-section-title">Режимы работы</p>', unsafe_allow_html=True)
+    m1, m2 = st.columns(2)
+    with m1:
+        st.markdown(
+            """
+            <div class="welcome-feature-card">
+                <div class="wf-icon">🧭</div>
+                <h3>Проверенный режим (baseline)</h3>
+                <p>Стабильный сценарий для операционной работы: базовый генератор данных,
+                рекомендации на правилах и линейной регрессии, симуляция с методами
+                <strong>rules</strong> и <strong>regression</strong>.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with m2:
+        st.markdown(
+            """
+            <div class="welcome-feature-card">
+                <div class="wf-icon">🧪</div>
+                <h3>Тестовый режим (experimental)</h3>
+                <p>Экспериментальный сценарий для проверки нелинейных эффектов: отдельный
+                генератор данных, рекомендации и симуляция на модели
+                <strong>LightGBM</strong> с диагностикой качества данных.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="welcome-section-sep"></div>', unsafe_allow_html=True)
+    st.markdown('<p class="welcome-section-title">Быстрый запуск</p>', unsafe_allow_html=True)
     st.markdown(
         """
         <div class="welcome-timeline-wrap">
@@ -245,48 +274,32 @@ def render_welcome_screen() -> None:
                     <span class="welcome-timeline-num">1</span>
                     <div class="welcome-timeline-body">
                         <strong>Режим</strong>
-                        <span>В боковой панели выберите режим:
-                        <em>проверенный</em> (rules + linear) или <em>тестовый</em> (LightGBM).</span>
+                        <span>В боковой панели выберите <em>проверенный</em> или <em>тестовый</em> режим
+                        в зависимости от задачи.</span>
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
                     <span class="welcome-timeline-num">2</span>
                     <div class="welcome-timeline-body">
                         <strong>Данные</strong>
-                        <span>В боковой панели загрузите CSV с историей или нажмите «Сгенерировать историю»
-                        — файл продаж будет готов к анализу для выбранного режима.</span>
+                        <span>Загрузите CSV с историей или нажмите «Сгенерировать историю»
+                        для быстрого старта.</span>
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
                     <span class="welcome-timeline-num">3</span>
                     <div class="welcome-timeline-body">
-                        <strong>Товар</strong>
-                        <span>Выберите конкретный SKU или пункт «Все товары», чтобы смотреть агрегаты
-                        портфеля и общие рекомендации.</span>
+                        <strong>Раздел</strong>
+                        <span>Откройте «Обзор» для диагностики, «Рекомендации» для новой цены
+                        или «Симуляцию» для оценки будущей прибыли.</span>
                     </div>
                 </div>
                 <div class="welcome-timeline-row">
                     <span class="welcome-timeline-num">4</span>
                     <div class="welcome-timeline-body">
-                        <strong>Обзор</strong>
-                        <span>Откройте вкладку «Обзор»: при необходимости уточните период в календаре,
-                        изучите графики и ключевые показатели.</span>
-                    </div>
-                </div>
-                <div class="welcome-timeline-row">
-                    <span class="welcome-timeline-num">5</span>
-                    <div class="welcome-timeline-body">
-                        <strong>Рекомендации</strong>
-                        <span>На вкладке «Рекомендации» изучите предложенные цены в рамках выбранного режима
-                        и подсказки по качеству данных.</span>
-                    </div>
-                </div>
-                <div class="welcome-timeline-row">
-                    <span class="welcome-timeline-num">6</span>
-                    <div class="welcome-timeline-body">
-                        <strong>Симуляция</strong>
-                        <span>Запустите симуляцию на вкладке «Симуляция», сравните историческую и прогнозную
-                        выручку, при необходимости выгрузите детализацию из сохранённого прогноза.</span>
+                        <strong>Результат</strong>
+                        <span>Сравните эффект по прибыли, при необходимости уточните период и
+                        сохраните детализацию прогноза.</span>
                     </div>
                 </div>
             </div>
@@ -295,6 +308,7 @@ def render_welcome_screen() -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown('<div class="welcome-section-sep"></div>', unsafe_allow_html=True)
     st.markdown('<p class="welcome-section-title">Пример визуализаций</p>', unsafe_allow_html=True)
     _render_welcome_demo_charts()
 
@@ -324,7 +338,7 @@ def render_welcome_screen() -> None:
     st.markdown(
         """
         <div class="welcome-cta">
-            <strong>Готово начать?</strong><br>
+            <strong>Готовы начать?</strong><br>
             Загрузите данные слева или сгенерируйте историю — разделы «Обзор», «Рекомендации» и «Симуляция»
             откроются автоматически.
         </div>
@@ -402,15 +416,8 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str, app_mode
     elif st.session_state.ov_pending_second:
         st.caption(f"Период расчета рекомендаций: с **{rs}** до последней даты в таблице.")
     mode_experimental = app_mode == "experimental"
-    if mode_experimental:
-        enable_lgbm = st.toggle(
-            "Включить LightGBM в рекомендациях",
-            value=True,
-            help="Ускоряет интерфейс при выключенном режиме. Включайте для сравнения моделей.",
-            key="rec_enable_lgbm",
-        )
-    else:
-        enable_lgbm = False
+    enable_lgbm = False
+    if not mode_experimental:
         st.caption("Проверенный режим: используются только эвристика и линейная регрессия.")
 
     if selected_product == "Все товары":
