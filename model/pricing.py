@@ -577,7 +577,7 @@ def simulate(
                         n_i = len(history_prices[i][hw])
                         if n_i == 0:
                             continue
-                        date_parts.append(pd.to_datetime(history_dates[i][hw]))
+                        date_parts.append(history_dates[i][hw])
                         price_parts.append(history_prices[i][hw])
                         comp_parts.append(history_comp_prices[i][hw])
                         sales_parts.append(history_sales[i][hw])
@@ -587,7 +587,7 @@ def simulate(
                         lgbm_packs_by_product[prod] = LGBMModelPack(None, [], False, ["Нет истории для обучения."], 1.0, 1.0)
                         continue
                     hist_df = pd.DataFrame({
-                        "date": pd.concat([pd.Series(x) for x in date_parts], ignore_index=True),
+                        "date": np.concatenate(date_parts),
                         "our_price": np.concatenate(price_parts),
                         "competitor_price": np.concatenate(comp_parts),
                         "sales": np.concatenate(sales_parts),
@@ -597,14 +597,10 @@ def simulate(
                     lgbm_packs_by_product[prod] = fit_lightgbm_sales_model(hist_df)
             if method == 'lightgbm':
                 for i in range(n_entities):
-                    hw = slice(-train_window_days, None) if train_window_days > 0 else slice(None)
+                    # Экономим время симуляции: для инференса из истории нужны только последние продажи для lags
+                    tail_len = min(7, len(history_sales[i]))
                     hist_df = pd.DataFrame({
-                        "date": pd.to_datetime(history_dates[i][hw]),
-                        "our_price": history_prices[i][hw],
-                        "competitor_price": history_comp_prices[i][hw],
-                        "sales": history_sales[i][hw],
-                        "is_oos": history_oos[i][hw],
-                        "cogs": np.full(len(history_prices[i][hw]), float(cogs[i])),
+                        "sales": history_sales[i][-tail_len:]
                     })
                     pack = lgbm_packs_by_product.get(products_by_entity[i], LGBMModelPack(None, [], False, ["Нет модели по товару."], 1.0, 1.0))
                     lgbm_rec = recommend_price_lightgbm_with_pack(
