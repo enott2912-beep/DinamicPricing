@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -30,7 +31,14 @@ def render_stored_simulation(sim_last: dict) -> None:
     ax.set_ylabel(f"Прибыль {title_suffix} (₽)")
     ax.set_title(f"Сценарный прогноз на {n_steps} дней (от {pd.Timestamp(max_period_date).date()})")
     ax.legend()
-    plt.xticks(rotation=45)
+    
+    # Продвинутое форматирование оси дат для огромных интервалов (30-100+ дней)
+    locator = mdates.AutoDateLocator()
+    formatter = mdates.ConciseDateFormatter(locator)
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(formatter)
+    fig.autofmt_xdate(rotation=45, ha='right')
+    
     st.pyplot(fig)
     plt.close(fig)
 

@@ -8,6 +8,7 @@ from model.math_engine import (
     calc_demand_regression,
     calc_demand_rules,
 )
+from model.rules_engine import get_rule_engine
 from sklearn.linear_model import LinearRegression
 try:
     from lightgbm import LGBMRegressor
@@ -230,51 +231,31 @@ def predict_sales_lightgbm_with_pack(
 
 def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
     """
-    Применяет бизнес-правила к текущему состоянию рынка для рекомендации цены.
-
-    Аргументы:
-        row: pd.Series с данными одного дня (our_price, competitor_price, sales).
-        avg_sales_7d: Средние продажи за последние 7 дней.
-
-    Возвращает:
-        tuple (рекомендованная_цена, название_правила).
+    Применяет бизнес-правила (через динамический RuleEngine) к текущему состоянию рынка для рекомендации цены.
     """
     price = float(row['our_price'])
     comp_1 = float(row.get('competitor_1_price', row.get('competitor_price', price)))
     comp_2 = float(row.get('competitor_2_price', row.get('competitor_price', price)))
     comp_price = min(comp_1, comp_2)
     sales = float(row['sales'])
+    cogs = float(row.get('cogs', 0.0))
 
-    # ПРАВИЛО 0: Строгое соответствие ТЗ Спринта 2 (если продаж совсем не было)
-    if sales == 0:
-        return round(price - 1.0, 2), "zero_sales_strict"
+    # Собираем контекст для движка правил
+    context = {
+        "price": price,
+        "comp_1": comp_1,
+        "comp_2": comp_2,
+        "comp_price": comp_price,
+        "sales": sales,
+        "avg_sales_7d": avg_sales_7d,
+        "cogs": cogs
+    }
 
-    # ПРАВИЛО 1: Реакция на конкурента (Спринт 2)
-    # Если конкурент значительно дешевле (на 10% и более), снижаем цену на 5%
-    if comp_price < price * 0.90:
-        return round(price * 0.95, 2), "competitor_undercut"
-
-    # ПРАВИЛО 2: Реакция на падение спроса (Спринт 2)
-    # Если продажи за вчера на 20% ниже скользящего среднего, пробуем стимулировать спрос
-    if sales < avg_sales_7d * 0.80:
-        return round(price - 1.0, 2), "low_sales"
-
-    # ПРАВИЛО 3: Умеренная реакция на разрыв с конкурентом (более чувствительное)
-    if comp_price < price * 0.97:
-        return round(max(1, price * 0.98), 2), "competitor_gap_soft"
-
-    # ПРАВИЛО 4: Если мы заметно дешевле конкурента и спрос не проседает, можно слегка поднять цену
-    if comp_price > price * 1.07 and sales >= avg_sales_7d * 0.95:
-        return round(price * 1.015, 2), "margin_recovery"
-
-    # ПРАВИЛО 5: Сглаживание — маленький шаг к цене конкурента, чтобы не зависать на hold
-    midpoint = (price + comp_price) / 2
-    if midpoint > price * 1.01:
-        return round(price * 1.005, 2), "drift_up"
-    if midpoint < price * 0.99:
-        return round(max(1, price * 0.995), 2), "drift_down"
-
-    return price, "hold"
+    # Выполняем оценку через закешированный экземпляр движка
+    engine = get_rule_engine()
+    # Если правила обновились в другом процессе, перезагружаем при каждом вызове не очень производительно,
+    # Но для MVP достаточно брать то, что есть в engine.rules (мы будем обновлять его внутри приложения)
+    return engine.evaluate(context)
 
 
 # ############################################################################

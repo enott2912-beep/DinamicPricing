@@ -862,6 +862,10 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str, app_mode: str
             )
         max_daily_price_change_pct = cfg3.slider("Лимит изменения цены в день (%)", 0.5, 10.0, 2.0, step=0.5)
 
+    if method == "rules":
+        from ui.rules_manager import render_rules_manager_inline
+        render_rules_manager_inline()
+
     if st.button("Запустить симуляцию", type="primary"):
         if len(prod_df_period) < 2:
             st.error("⛔ Слишком короткий период для обучения. Выберите диапазон пошире в календаре.")
