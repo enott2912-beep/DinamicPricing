@@ -1,8 +1,8 @@
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 
 CHART_LABELS = ["Точечный", "Линейный", "Столбчатая диаграмма", "Гистограмма"]
 CHART_LABELS_TIME = ["Точечный", "Линейный", "Столбчатая диаграмма", "Гистограмма"]
@@ -16,31 +16,41 @@ def render_stored_simulation(sim_last: dict) -> None:
     n_steps = sim_last["n_steps"]
     method = sim_last["method"]
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.plot(hist_rev.index, hist_rev.values, label="Выбранная история", color="blue", linewidth=1.5)
+    fig = go.Figure()
+
+    # Историческая прибыль
+    fig.add_trace(go.Scatter(
+        x=hist_rev.index, 
+        y=hist_rev.values, 
+        mode='lines', 
+        name="Выбранная история",
+        line=dict(color='blue', width=2)
+    ))
+
+    # Прогнозная прибыль
     if not future_sim.empty:
-        ax.plot(
-            future_sim.index,
-            future_sim.values,
-            label=f"Прогноз ({method})",
-            color="green",
-            ls="--",
-            linewidth=2,
-        )
-    ax.axvline(max_period_date, color="black", alpha=0.3, linestyle=":")
-    ax.set_ylabel(f"Прибыль {title_suffix} (₽)")
-    ax.set_title(f"Сценарный прогноз на {n_steps} дней (от {pd.Timestamp(max_period_date).date()})")
-    ax.legend()
-    
-    # Продвинутое форматирование оси дат для огромных интервалов (30-100+ дней)
-    locator = mdates.AutoDateLocator()
-    formatter = mdates.ConciseDateFormatter(locator)
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(formatter)
-    fig.autofmt_xdate(rotation=45, ha='right')
-    
-    st.pyplot(fig)
-    plt.close(fig)
+        fig.add_trace(go.Scatter(
+            x=future_sim.index, 
+            y=future_sim.values, 
+            mode='lines', 
+            name=f"Прогноз ({method})",
+            line=dict(color='green', width=3, dash='dash')
+        ))
+
+    # Вертикальная линия окончания периода истории
+    fig.add_vline(x=pd.Timestamp(max_period_date).timestamp() * 1000, line_width=2, line_dash="dash", line_color="black", opacity=0.3)
+
+    fig.update_layout(
+        title=f"Сценарный прогноз на {n_steps} дней (от {pd.Timestamp(max_period_date).date()})",
+        yaxis_title=f"Прибыль {title_suffix} (₽)",
+        xaxis_title="Дата",
+        hovermode="x unified",
+        template="plotly_white",
+        margin=dict(l=20, r=20, t=50, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    st.plotly_chart(fig, width='stretch')
 
     avg_sim = sim_last["avg_sim"]
     delta = sim_last["delta"]
@@ -93,106 +103,98 @@ def _daily_prices_agg(prod_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def plot_price_vs_sales(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> None:
+def plot_price_vs_sales(prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> go.Figure:
+    fig = go.Figure()
     if len(prod_df) == 0:
-        ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
-        return
+        fig.update_layout(title="Нет данных", xaxis_visible=False, yaxis_visible=False)
+        return fig
 
     use_daily = aggregate_daily and kind in ("Точечный", "Линейный")
     if use_daily:
         work = _daily_price_sales_agg(prod_df)
-        x = work["our_price"].values
-        y = work["sales"].values
         if len(work) == 0:
-            ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
-            return
+            fig.update_layout(title="Нет данных", xaxis_visible=False, yaxis_visible=False)
+            return fig
     else:
-        x = prod_df["our_price"].values
-        y = prod_df["sales"].values
+        work = prod_df.copy()
+
+    x_labels = "Цена (₽)" + (" — средняя по SKU за день" if use_daily else "")
+    y_labels = "Продажи (шт)"
 
     if kind == "Точечный":
-        ax.scatter(x, y, alpha=0.6, c="#1f77b4")
-        ax.set_xlabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
-        ax.set_ylabel("Продажи (шт)" + (" — сумма по SKU за день" if use_daily else ""))
+        y_labels += " — сумма по SKU за день" if use_daily else ""
+        fig = px.scatter(work, x="our_price", y="sales", opacity=0.7, color_discrete_sequence=["#1f77b4"])
+        fig.update_layout(xaxis_title=x_labels, yaxis_title=y_labels)
+
     elif kind == "Линейный":
-        # По оси X — цена: соединяем точки в порядке возрастания цены (как у одного SKU),
-        # иначе при дневной агрегации хронологический порядок даёт хаотичную «змейку».
-        order = np.argsort(x)
-        ax.plot(x[order], y[order], marker=".", alpha=0.8, color="#1f77b4")
-        ax.set_xlabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
-        ax.set_ylabel("Продажи (шт)" + (" — сумма по SKU за день" if use_daily else ""))
+        # Group by price to prevent zigzag lines, finding the mean sales per price point
+        grouped = work.groupby("our_price", as_index=False)["sales"].mean().sort_values("our_price")
+        y_labels += " (усреднено для каждой цены)"
+        fig = px.line(grouped, x="our_price", y="sales", markers=True, color_discrete_sequence=["#1f77b4"])
+        fig.update_layout(xaxis_title=x_labels, yaxis_title=y_labels)
+
     elif kind == "Столбчатая диаграмма":
         unique_prices = np.sort(prod_df["our_price"].unique())
         if len(unique_prices) > 10:
             bins = np.linspace(unique_prices.min(), unique_prices.max(), 9)
             labels = [f"{bins[i]:.0f}-{bins[i + 1]:.0f}" for i in range(len(bins) - 1)]
-            work = prod_df.copy()
-            work["price_bin"] = pd.cut(work["our_price"], bins=bins, labels=labels, include_lowest=True)
-            grouped = work.groupby("price_bin", as_index=False)["sales"].sum()
-            ax.bar(grouped["price_bin"].astype(str), grouped["sales"], color="#1f77b4", alpha=0.85)
-            ax.set_xlabel("Диапазон цены (₽)")
+            w = prod_df.copy()
+            w["price_bin"] = pd.cut(w["our_price"], bins=bins, labels=labels, include_lowest=True)
+            grouped = w.groupby("price_bin", as_index=False, observed=False)["sales"].sum()
+            fig = px.bar(grouped, x=grouped["price_bin"].astype(str), y="sales", color_discrete_sequence=["#1f77b4"])
+            fig.update_layout(xaxis_title="Диапазон цены (₽)", yaxis_title="Продажи (шт)")
         else:
             grouped = prod_df.groupby("our_price", as_index=False)["sales"].sum().sort_values("our_price")
-            ax.bar(grouped["our_price"].astype(str), grouped["sales"], color="#1f77b4", alpha=0.85)
-            ax.set_xlabel("Цена (₽)")
-        ax.set_ylabel("Продажи (шт)")
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+            fig = px.bar(grouped, x=grouped["our_price"].astype(str), y="sales", color_discrete_sequence=["#1f77b4"])
+            fig.update_layout(xaxis_title="Цена (₽)", yaxis_title="Продажи (шт)")
+
     elif kind == "Гистограмма":
         bins = min(20, max(5, len(prod_df) // 3))
-        ax.hist(x, bins=bins, weights=y, color="#1f77b4", alpha=0.75, edgecolor="white")
-        ax.set_xlabel("Цена (₽)")
-        ax.set_ylabel("Сумма продаж (вес по дням)")
+        # Имитируем взвешенную гистограмму, но px.histogram умеет y=sales
+        fig = px.histogram(work, x="our_price", y="sales", nbins=bins, color_discrete_sequence=["#1f77b4"])
+        fig.update_layout(xaxis_title="Цена (₽)", yaxis_title="Сумма продаж (вес по дням)")
 
-    ax.grid(True, alpha=0.3)
+    fig.update_layout(template="plotly_white", margin=dict(l=20, r=20, t=30, b=20))
+    return fig
 
 
-def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> None:
+def plot_prices_over_time(prod_df: pd.DataFrame, kind: str, *, aggregate_daily: bool = False) -> go.Figure:
+    fig = go.Figure()
     if len(prod_df) == 0:
-        ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
-        return
+        fig.update_layout(title="Нет данных", xaxis_visible=False, yaxis_visible=False)
+        return fig
 
     use_daily = aggregate_daily and kind in ("Точечный", "Линейный")
     if use_daily:
         plot_df = _daily_prices_agg(prod_df)
         if len(plot_df) == 0:
-            ax.text(0.5, 0.5, "Нет данных", ha="center", va="center", transform=ax.transAxes)
-            return
-        t = plot_df["date"].values
-        p1 = plot_df["our_price"].values
-        p2 = plot_df["competitor_1_price"].values
-        p3 = plot_df["competitor_2_price"].values
+            fig.update_layout(title="Нет данных", xaxis_visible=False, yaxis_visible=False)
+            return fig
     else:
-        t = prod_df["date"].values
-        p1 = prod_df["our_price"].values
-        p2_col = "competitor_1_price" if "competitor_1_price" in prod_df.columns else "competitor_price"
-        p3_col = "competitor_2_price" if "competitor_2_price" in prod_df.columns else "competitor_price"
-        p2 = prod_df[p2_col].values
-        p3 = prod_df[p3_col].values
+        plot_df = prod_df.copy()
+        if "competitor_1_price" not in plot_df.columns:
+            plot_df["competitor_1_price"] = plot_df["competitor_price"]
+        if "competitor_2_price" not in plot_df.columns:
+            plot_df["competitor_2_price"] = plot_df["competitor_price"]
+
+    l1, l2, l3 = (
+        ("Наша цена (средняя)", "Конкурент 1 (средняя)", "Конкурент 2 (средняя)")
+        if use_daily else ("Наша цена", "Цена конкурента 1", "Цена конкурента 2")
+    )
+    y_label = "Цена (₽)" + (" — средняя по SKU за день" if use_daily else "")
 
     if kind == "Точечный":
-        l1, l2, l3 = (
-            ("Наша цена (средняя по SKU за день)", "Конкурент 1 (средняя)", "Конкурент 2 (средняя)")
-            if use_daily
-            else ("Наша цена", "Цена конкурента 1", "Цена конкурента 2")
-        )
-        ax.scatter(t, p1, label=l1, alpha=0.8, c="#1f77b4")
-        ax.scatter(t, p2, label=l2, alpha=0.6, c="#ff7f0e", marker="s")
-        ax.scatter(t, p3, label=l3, alpha=0.6, c="#2ca02c", marker="^")
-        ax.set_ylabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
-        ax.legend()
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["our_price"], mode='markers', name=l1, marker=dict(color="#1f77b4")))
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["competitor_1_price"], mode='markers', name=l2, marker=dict(color="#ff7f0e", symbol="square")))
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["competitor_2_price"], mode='markers', name=l3, marker=dict(color="#2ca02c", symbol="triangle-up")))
+        fig.update_layout(yaxis_title=y_label)
+
     elif kind == "Линейный":
-        l1, l2, l3 = (
-            ("Наша цена (средняя по SKU за день)", "Конкурент 1 (средняя)", "Конкурент 2 (средняя)")
-            if use_daily
-            else ("Наша цена", "Цена конкурента 1", "Цена конкурента 2")
-        )
-        ax.plot(t, p1, label=l1, marker=".", alpha=0.8)
-        ax.plot(t, p2, label=l2, ls="--", alpha=0.7)
-        ax.plot(t, p3, label=l3, ls=":", alpha=0.8)
-        ax.set_ylabel("Цена (₽)" + (" — средняя по SKU за день" if use_daily else ""))
-        ax.legend()
-        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha="right")
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["our_price"], mode='lines+markers', name=l1, line=dict(color="#1f77b4")))
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["competitor_1_price"], mode='lines', name=l2, line=dict(color="#ff7f0e", dash="dash")))
+        fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["competitor_2_price"], mode='lines', name=l3, line=dict(color="#2ca02c", dash="dot")))
+        fig.update_layout(yaxis_title=y_label)
+
     elif kind == "Столбчатая диаграмма":
         n = len(prod_df)
         if n > 30:
@@ -200,56 +202,38 @@ def plot_prices_over_time(ax, prod_df: pd.DataFrame, kind: str, *, aggregate_dai
             df_copy["date"] = pd.to_datetime(df_copy["date"])
             days_range = (df_copy["date"].max() - df_copy["date"].min()).days
             if days_range <= 60:
-                freq, freq_name, label_fmt = "3D", "по 3 дня", "%m-%d"
+                freq = "3D"
             elif days_range <= 180:
-                freq, freq_name, label_fmt = "W", "по неделям", "%m-%d"
+                freq = "W"
             else:
-                freq, freq_name, label_fmt = "ME", "по месяцам", "%Y-%m"
+                freq = "ME"
             agg_map = {"our_price": "mean", "competitor_price": "mean"}
             if "competitor_1_price" in df_copy.columns:
                 agg_map["competitor_1_price"] = "mean"
             if "competitor_2_price" in df_copy.columns:
                 agg_map["competitor_2_price"] = "mean"
             df_agg = df_copy.groupby(pd.Grouper(key="date", freq=freq)).agg(agg_map).dropna()
-            if len(df_agg) == 0:
-                ax.text(0.5, 0.5, "Недостаточно данных", ha="center", va="center", transform=ax.transAxes)
-                return
-            x = np.arange(len(df_agg))
-            p1_agg = df_agg["our_price"].values
+            
             p2_col = "competitor_1_price" if "competitor_1_price" in df_agg.columns else "competitor_price"
             p3_col = "competitor_2_price" if "competitor_2_price" in df_agg.columns else "competitor_price"
-            p2_agg = df_agg[p2_col].values
-            p3_agg = df_agg[p3_col].values
-            date_labels = [d.strftime(label_fmt) for d in df_agg.index]
-            ax.bar(x - 0.25, p1_agg, width=0.25, label="Наша цена (средняя)", alpha=0.8)
-            ax.bar(x, p2_agg, width=0.25, label="Конкурент 1 (средний)", alpha=0.8)
-            ax.bar(x + 0.25, p3_agg, width=0.25, label="Конкурент 2 (средний)", alpha=0.8)
-            ax.set_title(f"Средние цены (сгруппировано {freq_name})", fontsize=9)
-        else:
-            x = np.arange(n)
-            w = 0.25
-            ax.bar(x - w, p1, width=w, label="Наша цена", alpha=0.8)
-            ax.bar(x, p2, width=w, label="Конкурент 1", alpha=0.8)
-            ax.bar(x + w, p3, width=w, label="Конкурент 2", alpha=0.8)
-            date_labels = [pd.Timestamp(ti).strftime("%m-%d") for ti in t]
 
-        ax.set_xticks(x)
-        if len(date_labels) > 15:
-            step = max(1, len(date_labels) // 12)
-            visible_labels = [date_labels[i] if i % step == 0 else "" for i in range(len(date_labels))]
-            ax.set_xticklabels(visible_labels, rotation=45, ha="right", fontsize=8)
-            ax.set_xticks(list(range(0, len(date_labels), step)))
+            fig.add_trace(go.Bar(x=df_agg.index, y=df_agg["our_price"], name=l1, marker_color="#1f77b4"))
+            fig.add_trace(go.Bar(x=df_agg.index, y=df_agg[p2_col], name=l2, marker_color="#ff7f0e"))
+            fig.add_trace(go.Bar(x=df_agg.index, y=df_agg[p3_col], name=l3, marker_color="#2ca02c"))
+            fig.update_layout(barmode='group', title=f"Средние цены (группировано)")
         else:
-            ax.set_xticklabels(date_labels, rotation=45, ha="right", fontsize=9)
-        ax.set_ylabel("Цена (₽)")
-        ax.legend()
-        ax.grid(axis="y", alpha=0.3)
-        plt.setp(ax.xaxis.get_majorticklabels(), ha="right")
+            fig.add_trace(go.Bar(x=plot_df["date"], y=plot_df["our_price"], name=l1, marker_color="#1f77b4"))
+            fig.add_trace(go.Bar(x=plot_df["date"], y=plot_df["competitor_1_price"], name=l2, marker_color="#ff7f0e"))
+            fig.add_trace(go.Bar(x=plot_df["date"], y=plot_df["competitor_2_price"], name=l3, marker_color="#2ca02c"))
+            fig.update_layout(barmode='group')
+        fig.update_layout(yaxis_title="Цена (₽)")
+
     elif kind == "Гистограмма":
-        bins = min(15, max(5, len(prod_df) // 2))
-        ax.hist(p1, bins=bins, alpha=0.7, label="Наша цена", color="#1f77b4")
-        ax.hist(p2, bins=bins, alpha=0.5, label="Конкурент 1", color="#ff7f0e")
-        ax.hist(p3, bins=bins, alpha=0.4, label="Конкурент 2", color="#2ca02c")
-        ax.set_xlabel("Цена (₽)")
-        ax.set_ylabel("Число дней")
-        ax.legend()
+        # Поскольку px.histogram не может рисовать поверх легко, используем go.Histogram
+        fig.add_trace(go.Histogram(x=plot_df["our_price"], name=l1, opacity=0.7, marker_color="#1f77b4"))
+        fig.add_trace(go.Histogram(x=plot_df["competitor_1_price"], name=l2, opacity=0.5, marker_color="#ff7f0e"))
+        fig.add_trace(go.Histogram(x=plot_df["competitor_2_price"], name=l3, opacity=0.4, marker_color="#2ca02c"))
+        fig.update_layout(barmode='overlay', xaxis_title="Цена (₽)", yaxis_title="Число дней")
+
+    fig.update_layout(hovermode="x unified", template="plotly_white", margin=dict(l=20, r=20, t=30, b=20), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    return fig

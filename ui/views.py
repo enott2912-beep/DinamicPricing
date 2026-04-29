@@ -1,7 +1,8 @@
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
+import plotly.express as px
 
 from model.pricing import (
     simulate,
@@ -119,36 +120,33 @@ def _render_welcome_demo_charts() -> None:
     comp = price * 1.03 + rng.normal(0, 2.2, n)
     dates = pd.date_range(periods=n, freq="D", end=pd.Timestamp("2026-03-15"))
 
-    demo_face = "#f0f4fb"
-    demo_grid = "#d8e0ef"
-
-    fig1, ax1 = plt.subplots(figsize=(5.2, 3.1))
-    ax1.set_facecolor(demo_face)
-    fig1.patch.set_facecolor("#fafbfd")
-    ax1.scatter(price, sales, alpha=0.72, c="#2b6fcf", edgecolors="white", linewidths=0.35, s=52, zorder=3)
+    fig1 = go.Figure()
+    fig1.add_trace(go.Scatter(x=price, y=sales, mode='markers', name="Точки", marker=dict(color="#2b6fcf", size=8)))
     order = np.argsort(price)
-    ax1.plot(price[order], sales[order], color="#153a7a", alpha=0.42, lw=1.35, zorder=2)
-    ax1.set_xlabel("Наша цена (₽)", fontsize=9)
-    ax1.set_ylabel("Продажи (шт)", fontsize=9)
-    ax1.set_title("Обзор: цена и спрос", fontsize=10, fontweight="600", pad=10, color="#1a2744")
-    ax1.grid(True, alpha=0.35, color=demo_grid)
-    ax1.spines["top"].set_visible(False)
-    ax1.spines["right"].set_visible(False)
-    fig1.tight_layout()
+    fig1.add_trace(go.Scatter(x=price[order], y=sales[order], mode='lines', name="Тренд", line=dict(color="#153a7a", width=2), opacity=0.42))
+    
+    fig1.update_layout(
+        title="Обзор: цена и спрос",
+        xaxis_title="Наша цена (₽)",
+        yaxis_title="Продажи (шт)",
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=40, b=10),
+        showlegend=False,
+        height=300
+    )
 
-    fig2, ax2 = plt.subplots(figsize=(5.2, 3.1))
-    ax2.set_facecolor(demo_face)
-    fig2.patch.set_facecolor("#fafbfd")
-    ax2.plot(dates, price, marker=".", markersize=5, label="Наша цена", color="#2b6fcf", lw=1.2)
-    ax2.plot(dates, comp, ls="--", lw=1.1, label="Конкурент", color="#c45c12", alpha=0.88)
-    ax2.set_ylabel("Цена (₽)", fontsize=9)
-    ax2.legend(loc="upper right", fontsize=8, framealpha=0.92)
-    ax2.set_title("Динамика относительно рынка", fontsize=10, fontweight="600", pad=10, color="#1a2744")
-    ax2.grid(True, alpha=0.35, color=demo_grid)
-    ax2.spines["top"].set_visible(False)
-    ax2.spines["right"].set_visible(False)
-    fig2.autofmt_xdate()
-    fig2.tight_layout()
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(x=dates, y=price, mode='lines+markers', name="Наша цена", line=dict(color="#2b6fcf", width=2)))
+    fig2.add_trace(go.Scatter(x=dates, y=comp, mode='lines', name="Конкурент", line=dict(color="#c45c12", width=2, dash="dash")))
+
+    fig2.update_layout(
+        title="Динамика относительно рынка",
+        yaxis_title="Цена (₽)",
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=40, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        height=300
+    )
 
     c_a, c_b = st.columns(2, gap="medium")
     with c_a:
@@ -162,7 +160,7 @@ def _render_welcome_demo_charts() -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.pyplot(fig1)
+        st.plotly_chart(fig1, width='stretch')
     with c_b:
         st.markdown(
             """
@@ -174,10 +172,7 @@ def _render_welcome_demo_charts() -> None:
             """,
             unsafe_allow_html=True,
         )
-        st.pyplot(fig2)
-
-    plt.close(fig1)
-    plt.close(fig2)
+        st.plotly_chart(fig2, width='stretch')
 
 
 def render_welcome_screen() -> None:
@@ -384,19 +379,13 @@ def render_overview_tab(df: pd.DataFrame, selected_product: str) -> None:
 
     st.subheader("Зависимость продаж от нашей цены")
     kind1 = st.selectbox("Тип графика", CHART_LABELS, key="ov_chart_price_sales")
-    fig, ax = plt.subplots(figsize=(10, 4))
-    plot_price_vs_sales(ax, prod_df, kind1, aggregate_daily=(selected_product == "Все товары"))
-    fig.tight_layout()
-    st.pyplot(fig)
-    plt.close(fig)
+    fig1 = plot_price_vs_sales(prod_df, kind1, aggregate_daily=(selected_product == "Все товары"))
+    st.plotly_chart(fig1, width='stretch')
 
     st.subheader("Динамика нашей цены и цены конкурента")
     kind2 = st.selectbox("Тип графика", CHART_LABELS_TIME, key="ov_chart_time")
-    fig2, ax2 = plt.subplots(figsize=(10, 4))
-    plot_prices_over_time(ax2, prod_df, kind2, aggregate_daily=(selected_product == "Все товары"))
-    fig2.tight_layout()
-    st.pyplot(fig2)
-    plt.close(fig2)
+    fig2 = plot_prices_over_time(prod_df, kind2, aggregate_daily=(selected_product == "Все товары"))
+    st.plotly_chart(fig2, width='stretch')
 
 
 def render_recommendations_tab(df: pd.DataFrame, selected_product: str, app_mode: str = "baseline") -> None:
@@ -601,51 +590,40 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str, app_mode
         c_val = float(work_df['cogs'].mean()) if 'cogs' in work_df.columns else 0.0
         profits = (prices - c_val) * (res['a_agg'] - res['b_agg'] * prices)
 
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.plot(prices, profits, label="Прогноз прибыли (агрегат)", color="gray", alpha=0.5)
-        ax.axvline(
-            last_row["our_price"],
-            color="#d62728",
-            ls="--",
-            lw=2.0,
-            label=f"Средняя сейчас ({last_row['our_price']:.2f})",
-        )
-        ax.axvline(
-            res["mean_rec_rules"],
-            color="#1f77b4",
-            ls=":",
-            lw=2.0,
-            label=f"Эвристика ({res['mean_rec_rules']:.2f})",
-        )
-        ax.axvline(
-            res["mean_opt_reg"],
-            color="#2ca02c",
-            ls="-",
-            lw=2.3,
-            label=f"Линейная по SKU ({res['mean_opt_reg']:.2f})",
-        )
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=prices, y=profits, mode='lines', name="Прогноз прибыли (агрегат)", line=dict(color='gray', width=2), opacity=0.5))
+        
+        max_p = float(np.max(profits)) if len(profits) > 0 else 100
+        y_range = [0, max_p * 1.1]
+
+        def add_vtrace(fig, x_val, name, color, dash='solid'):
+            fig.add_trace(go.Scatter(
+                x=[x_val, x_val], y=y_range,
+                mode='lines', name=name,
+                line=dict(color=color, width=2, dash=dash),
+                showlegend=True
+            ))
+
+        add_vtrace(fig, last_row["our_price"], f"Средняя сейчас ({last_row['our_price']:.2f})", "#d62728", 'dash')
+        add_vtrace(fig, res["mean_rec_rules"], f"Эвристика ({res['mean_rec_rules']:.2f})", "#1f77b4", 'dot')
+        add_vtrace(fig, res["mean_opt_reg"], f"Линейная по SKU ({res['mean_opt_reg']:.2f})", "#2ca02c")
+        
         if enable_lgbm:
-            ax.axvline(
-                res["mean_opt_nl"],
-                color="#9467bd",
-                ls="-.",
-                lw=2.2,
-                label=f"LightGBM по SKU ({res['mean_opt_nl']:.2f})",
-            )
+            add_vtrace(fig, res["mean_opt_nl"], f"LightGBM по SKU ({res['mean_opt_nl']:.2f})", "#9467bd", 'dashdot')
+            
         if res['rel_agg'] and res['b_agg'] > 0:
-            ax.axvline(
-                res['opt_agg'],
-                color="#111111",
-                ls=(0, (5, 3)),
-                lw=1.8,
-                label=f"Оптимум агрег. ({res['opt_agg']:.2f})",
-            )
-        ax.set_xlabel("Средняя цена портфеля (₽)")
-        ax.set_ylabel("Прогнозируемая прибыль (модель по дням)")
-        ax.legend(loc="upper right", fontsize=9)
-        ax.grid(alpha=0.25)
-        st.pyplot(fig)
-        plt.close(fig)
+            add_vtrace(fig, res['opt_agg'], f"Оптимум агрег. ({res['opt_agg']:.2f})", "#111111", 'longdash')
+
+        fig.update_layout(
+            xaxis_title="Средняя цена портфеля (₽)",
+            yaxis_title="Прогнозируемая прибыль (модель по дням)",
+            yaxis_range=y_range,
+            hovermode="x unified",
+            template="plotly_white",
+            margin=dict(l=20, r=20, t=30, b=80),
+            legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5)
+        )
+        st.plotly_chart(fig, width='stretch')
 
         compare_portfolio_rows = [
             {"Источник": "Средняя текущая", "Цена, ₽": round(float(last_row["our_price"]), 2)},
@@ -723,41 +701,38 @@ def render_recommendations_tab(df: pd.DataFrame, selected_product: str, app_mode
     comp_cogs = float(res['last_row'].get('cogs', PRODUCTS.get(selected_product, {}).get('cogs', 0.0)))
     profits = (prices - comp_cogs) * (res['a'] - res['b'] * prices)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(prices, profits, label="Кривая прибыли (линейная модель)", color="#8a8a8a", alpha=0.65, lw=1.8)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=prices, y=profits, mode='lines', name="Кривая прибыли (линейная модель)", line=dict(color='#8a8a8a', width=1.8), opacity=0.65))
+
+    max_p = float(np.max(profits)) if len(profits) > 0 else 100
+    y_range = [0, max_p * 1.1]
+
+    def add_vtrace(fig, x_val, name, color, dash='solid'):
+        fig.add_trace(go.Scatter(
+            x=[x_val, x_val], y=y_range,
+            mode='lines', name=name,
+            line=dict(color=color, width=2, dash=dash),
+            showlegend=True
+        ))
+
     cur_price = res['last_row']['our_price']
-    ax.axvline(
-        cur_price, color="#d62728", ls="--", lw=2.0,
-        label=f"Текущая ({cur_price:.2f})",
-    )
-    ax.axvline(
-        res['rec_price_rules'],
-        color="#1f77b4",
-        ls=":",
-        lw=2.0,
-        label=f"Эвристика ({res['rec_price_rules']:.2f})",
-    )
-    ax.axvline(
-        res['opt_price_reg'],
-        color="#111111",
-        ls=(0, (5, 3)),
-        lw=2.2,
-        label=f"Оптимум линейной ({res['opt_price_reg']:.2f})",
-    )
+    add_vtrace(fig, cur_price, f"Текущая ({cur_price:.2f})", "#d62728", 'dash')
+    add_vtrace(fig, res['rec_price_rules'], f"Эвристика ({res['rec_price_rules']:.2f})", "#1f77b4", 'dot')
+    add_vtrace(fig, res['opt_price_reg'], f"Оптимум линейной ({res['opt_price_reg']:.2f})", "#111111", 'longdash')
+
     if enable_lgbm:
-        ax.axvline(
-            res['opt_price_nl'],
-            color="#9467bd",
-            ls="-.",
-            lw=2.2,
-            label=f"LightGBM ({res['opt_price_nl']:.2f})",
-        )
-    ax.set_xlabel("Цена (₽)")
-    ax.set_ylabel("Прогнозируемая прибыль")
-    ax.legend(loc="upper left", fontsize=9)
-    ax.grid(alpha=0.25)
-    st.pyplot(fig)
-    plt.close(fig)
+        add_vtrace(fig, res['opt_price_nl'], f"LightGBM ({res['opt_price_nl']:.2f})", "#9467bd", 'dashdot')
+
+    fig.update_layout(
+        xaxis_title="Цена (₽)",
+        yaxis_title="Прогнозируемая прибыль",
+        yaxis_range=y_range,
+        hovermode="x unified",
+        template="plotly_white",
+        margin=dict(l=20, r=20, t=30, b=80),
+        legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5)
+    )
+    st.plotly_chart(fig, width='stretch')
 
     compare_rows_data = [
         {"Источник": "Текущая", "Цена, ₽": round(float(cur_price), 2)},
@@ -979,4 +954,4 @@ def render_simulation_tab(df: pd.DataFrame, selected_product: str, app_mode: str
             )
 
     pred_filtered = apply_predict_period_filter(pred_df)
-    st.dataframe(_ru_table(pred_filtered), use_container_width=True)
+    st.dataframe(_ru_table(pred_filtered), width='stretch')

@@ -10,7 +10,7 @@ venv/
 
 # Data and Results
 data/*.csv
-data/plots/
+data/rules_history
 *.csv
 predict*
 !requirements.txt
@@ -18,6 +18,3 @@ predict*
 # IDEs
 .vscode/
 .idea/
-
-# Jupyter
-.ipynb_checkpoints

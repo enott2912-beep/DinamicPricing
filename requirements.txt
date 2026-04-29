@@ -1,6 +1,6 @@
 pandas
 numpy
 scikit-learn
-matplotlib
 streamlit
 lightgbm
+plotly
