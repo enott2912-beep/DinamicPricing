@@ -4,6 +4,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from pandas.errors import EmptyDataError
+from ui.session_store import (
+    clear_predict_df,
+    get_current_session_id,
+    get_generation_mode,
+    load_predict_df,
+    load_sales_history_df,
+    save_predict_df,
+    save_sales_history_df,
+    set_generation_mode,
+)
 
 BASE_DIR = Path(__file__).parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -112,13 +122,26 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
 
 @st.cache_data
 def load_data(uploaded_file=None, use_uploaded: bool = False):
+    session_id = get_current_session_id()
     try:
         if use_uploaded and uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
+            if session_id:
+                validated = _validate_loaded_data(df)
+                if validated is not None:
+                    save_sales_history_df(session_id, validated)
+                return validated
         else:
-            if not SALES_HISTORY_PATH.exists():
-                return None
-            df = pd.read_csv(SALES_HISTORY_PATH)
+            df = load_sales_history_df(session_id) if session_id else None
+            if df is None:
+                if not SALES_HISTORY_PATH.exists():
+                    return None
+                df = pd.read_csv(SALES_HISTORY_PATH)
+                if session_id:
+                    validated = _validate_loaded_data(df)
+                    if validated is not None:
+                        save_sales_history_df(session_id, validated)
+                    return validated
     except EmptyDataError:
         return None
 
@@ -126,8 +149,7 @@ def load_data(uploaded_file=None, use_uploaded: bool = False):
 
 
 def clear_predict_file(columns: list[str] | None = None) -> None:
-    """Очищает файл прогнозов (predict_sales.csv)."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    """Очищает прогнозы текущей сессии."""
     cols = columns or [
         "date",
         "store_id",
@@ -147,24 +169,42 @@ def clear_predict_file(columns: list[str] | None = None) -> None:
         "cogs",
         "profit",
     ]
-    pd.DataFrame(columns=cols).to_csv(PREDICT_PATH, index=False)
+    session_id = get_current_session_id()
+    if session_id:
+        clear_predict_df(session_id, cols)
+    else:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(columns=cols).to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()
 
 
 def get_generated_mode() -> str | None:
-    """Возвращает режим последней генерации: baseline | experimental."""
-    if not GEN_MODE_PATH.exists():
-        return None
-    try:
-        mode = GEN_MODE_PATH.read_text(encoding="utf-8").strip().lower()
-        return mode or None
-    except OSError:
-        return None
+    """Возвращает режим генерации для текущей сессии."""
+    session_id = get_current_session_id()
+    if session_id:
+        mode = get_generation_mode(session_id)
+        if mode is not None:
+            return mode
+    if GEN_MODE_PATH.exists():
+        try:
+            mode = GEN_MODE_PATH.read_text(encoding="utf-8").strip().lower()
+            return mode or None
+        except OSError:
+            return None
+    return None
+
+
+def save_session_sales_history(df: pd.DataFrame, mode: str | None = None) -> None:
+    session_id = get_current_session_id()
+    if not session_id:
+        return
+    save_sales_history_df(session_id, df)
+    if mode:
+        set_generation_mode(session_id, mode)
 
 
 def save_predict_file(df: pd.DataFrame) -> None:
-    """Полностью перезаписывает predict_sales.csv текущим прогнозом (без слияния)."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    """Полностью перезаписывает прогноз текущей сессии."""
     out = df.copy()
     if out.empty:
         return
@@ -178,16 +218,24 @@ def save_predict_file(df: pd.DataFrame) -> None:
         sort_cols = ["date", "product"]
     out = out.sort_values(sort_cols).reset_index(drop=True)
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
-    out.to_csv(PREDICT_PATH, index=False)
+    session_id = get_current_session_id()
+    if session_id:
+        save_predict_df(session_id, out)
+    else:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        out.to_csv(PREDICT_PATH, index=False)
     st.cache_data.clear()
 
 
 @st.cache_data
 def load_predict_data() -> pd.DataFrame | None:
-    """Загружает прогнозы из отдельного файла predict_sales.csv."""
-    if not PREDICT_PATH.exists():
-        return None
-    pred_df = pd.read_csv(PREDICT_PATH)
+    """Загружает прогнозы текущей сессии."""
+    session_id = get_current_session_id()
+    pred_df = load_predict_df(session_id) if session_id else None
+    if pred_df is None:
+        if not PREDICT_PATH.exists():
+            return None
+        pred_df = pd.read_csv(PREDICT_PATH)
     if pred_df.empty:
         return pred_df
     if "date" in pred_df.columns:

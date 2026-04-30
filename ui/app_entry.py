@@ -1,12 +1,26 @@
 import sys
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 sys.path.append(str(Path(__file__).parent.parent))  # noqa: E402
 from generator.generate_data import main as run_data_generation
 from ui.calendars import get_product_df_with_period
-from ui.data_manager import clear_predict_file, df_fingerprint, get_generated_mode, load_data
+from ui.data_manager import (
+    SALES_HISTORY_PATH,
+    clear_predict_file,
+    df_fingerprint,
+    get_generated_mode,
+    load_data,
+    save_session_sales_history,
+)
+from ui.session_store import (
+    clear_session_data,
+    get_or_create_session_id,
+    get_current_session_id,
+    start_new_session,
+)
 from ui.views import (
     render_overview_tab,
     render_recommendations_tab,
@@ -241,6 +255,22 @@ def configure_page() -> None:
 
 def build_sidebar():
     st.sidebar.title("⚙️ Управление")
+    sid = get_current_session_id()
+    sid_short = f"{sid[:8]}...{sid[-8:]}" if sid and len(sid) > 20 else (sid or "n/a")
+    st.sidebar.caption(f"Сессия: `{sid_short}`")
+    s_col1, s_col2 = st.sidebar.columns(2)
+    if s_col1.button("🆕 Новая сессия", use_container_width=True):
+        start_new_session()
+        st.cache_data.clear()
+        st.rerun()
+    if s_col2.button("🧹 Очистить", use_container_width=True):
+        if sid:
+            clear_session_data(sid)
+        st.session_state.pop("sim_last", None)
+        st.cache_data.clear()
+        st.rerun()
+    st.sidebar.markdown("---")
+
     app_mode = st.sidebar.radio(
         "Режим работы",
         ["Проверенный (rules + linear)", "Тестовый (nonlinear + lightgbm)"],
@@ -274,6 +304,13 @@ def build_sidebar():
     if st.sidebar.button("✨ Сгенерировать историю", help="Полностью перезапишет файл sales_history.csv"):
         with st.spinner("Генерация данных..."):
             run_data_generation(int(n_generate_days), mode=mode_key)
+            if SALES_HISTORY_PATH.exists():
+                try:
+                    generated_df = pd.read_csv(SALES_HISTORY_PATH)
+                except Exception:
+                    generated_df = None
+                if generated_df is not None:
+                    save_session_sales_history(generated_df, mode=mode_key)
             st.cache_data.clear()
             clear_predict_file()
             st.sidebar.success("История сгенерирована!")
@@ -285,6 +322,7 @@ def build_sidebar():
 
 def main() -> None:
     configure_page()
+    get_or_create_session_id()
     uploaded_file, use_uploaded_data, mode_key = build_sidebar()
     df = load_data(uploaded_file, use_uploaded=use_uploaded_data)
 
