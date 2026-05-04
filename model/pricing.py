@@ -419,9 +419,6 @@ def simulate(
         return sim_df
 
     products_by_entity = entities_df['product'].tolist()
-    product_to_indices: dict[str, list[int]] = {}
-    for idx, prod in enumerate(products_by_entity):
-        product_to_indices.setdefault(prod, []).append(idx)
     base_prices = np.array([PRODUCTS[p]['base_price'] for p in products_by_entity], dtype=float)
     base_sales = np.array([PRODUCTS[p]['base_sales'] for p in products_by_entity], dtype=float)
     elasticities = np.array([PRODUCTS[p]['elasticity'] for p in products_by_entity], dtype=float)
@@ -447,7 +444,10 @@ def simulate(
     history_oos: list[np.ndarray] = [np.array([], dtype=bool) for _ in range(n_entities)]
     history_comp_prices: list[np.ndarray] = [np.array([], dtype=float) for _ in range(n_entities)]
     history_dates: list[np.ndarray] = [np.array([], dtype="datetime64[ns]") for _ in range(n_entities)]
-    lgbm_packs_by_product: dict[str, LGBMModelPack] = {}
+    lgbm_packs_by_entity: list[LGBMModelPack] = [
+        LGBMModelPack(None, [], False, ["Модель еще не обучалась."], 1.0, 1.0)
+        for _ in range(n_entities)
+    ]
 
     for i, entity in entities_df.iterrows():
         mask = sim_df['product'] == entity['product']
@@ -545,37 +545,24 @@ def simulate(
                     elif method == 'lightgbm':
                         pass
             if method == 'lightgbm' and retrain_step:
-                lgbm_packs_by_product = {}
-                for prod, idxs in product_to_indices.items():
-                    date_parts = []
-                    price_parts = []
-                    comp_parts = []
-                    sales_parts = []
-                    oos_parts = []
-                    cogs_parts = []
-                    for i in idxs:
-                        hw = slice(-train_window_days, None) if train_window_days > 0 else slice(None)
-                        n_i = len(history_prices[i][hw])
-                        if n_i == 0:
-                            continue
-                        date_parts.append(history_dates[i][hw])
-                        price_parts.append(history_prices[i][hw])
-                        comp_parts.append(history_comp_prices[i][hw])
-                        sales_parts.append(history_sales[i][hw])
-                        oos_parts.append(history_oos[i][hw])
-                        cogs_parts.append(np.full(n_i, float(cogs[i])))
-                    if not price_parts:
-                        lgbm_packs_by_product[prod] = LGBMModelPack(None, [], False, ["Нет истории для обучения."], 1.0, 1.0)
+                lgbm_packs_by_entity = []
+                for i in range(n_entities):
+                    hw = slice(-train_window_days, None) if train_window_days > 0 else slice(None)
+                    n_i = len(history_prices[i][hw])
+                    if n_i == 0:
+                        lgbm_packs_by_entity.append(
+                            LGBMModelPack(None, [], False, ["Нет истории для обучения."], 1.0, 1.0)
+                        )
                         continue
                     hist_df = pd.DataFrame({
-                        "date": np.concatenate(date_parts),
-                        "our_price": np.concatenate(price_parts),
-                        "competitor_price": np.concatenate(comp_parts),
-                        "sales": np.concatenate(sales_parts),
-                        "is_oos": np.concatenate(oos_parts),
-                        "cogs": np.concatenate(cogs_parts),
+                        "date": history_dates[i][hw],
+                        "our_price": history_prices[i][hw],
+                        "competitor_price": history_comp_prices[i][hw],
+                        "sales": history_sales[i][hw],
+                        "is_oos": history_oos[i][hw],
+                        "cogs": np.full(n_i, float(cogs[i])),
                     }).sort_values("date")
-                    lgbm_packs_by_product[prod] = fit_lightgbm_sales_model(hist_df)
+                    lgbm_packs_by_entity.append(fit_lightgbm_sales_model(hist_df))
             if method == 'lightgbm':
                 for i in range(n_entities):
                     # Экономим время симуляции: для инференса из истории нужны только последние продажи для lags
@@ -583,7 +570,7 @@ def simulate(
                     hist_df = pd.DataFrame({
                         "sales": history_sales[i][-tail_len:]
                     })
-                    pack = lgbm_packs_by_product.get(products_by_entity[i], LGBMModelPack(None, [], False, ["Нет модели по товару."], 1.0, 1.0))
+                    pack = lgbm_packs_by_entity[i]
                     lgbm_rec = recommend_price_lightgbm_with_pack(
                         model_pack=pack,
                         history_df=hist_df,
@@ -644,7 +631,7 @@ def simulate(
                         np.array([elasticities[i]]),
                         np.array([noise_rules]),
                     )[0]
-            new_sales = np.maximum(0.0, np.round(new_sales * seasonal_multiplier))
+            new_sales = np.maximum(0.0, np.round(new_sales))
         else:
             # Чистая эвристика
             noise = rng.normal(0, np.maximum(2.0, 0.08 * seasonal_base_sales), size=n_entities)
