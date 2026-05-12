@@ -1,0 +1,44 @@
+[
+  {
+    "name": "zero_sales_strict",
+    "description": "При нулевых продажах сразу снижаем цену",
+    "condition": "sales == 0",
+    "action": "price - 1.0"
+  },
+  {
+    "name": "competitor_undercut",
+    "description": "Если конкурент значительно дешевле (на 10%+)",
+    "condition": "comp_price < price * 0.90",
+    "action": "price * 0.95"
+  },
+  {
+    "name": "low_sales",
+    "description": "Реакция на падение спроса на 20% ниже нормы",
+    "condition": "sales < avg_sales_7d * 0.80",
+    "action": "price - 1.0"
+  },
+  {
+    "name": "competitor_gap_soft",
+    "description": "Мягкая просадка цены за конкурентом",
+    "condition": "comp_price < price * 0.97",
+    "action": "max(1.0, price * 0.98)"
+  },
+  {
+    "name": "margin_recovery",
+    "description": "Если конкурент сильно дороже, и спрос норм, повышаем цену",
+    "condition": "comp_price > price * 1.07 and sales >= avg_sales_7d * 0.95",
+    "action": "price * 1.015"
+  },
+  {
+    "name": "drift_up",
+    "description": "Маленький дрейф вверх при стабильно высоком конкуренте",
+    "condition": "(price + comp_price) / 2 > price * 1.01",
+    "action": "price * 1.005"
+  },
+  {
+    "name": "drift_down",
+    "description": "Маленький дрейф вниз при стабильно низком конкуренте",
+    "condition": "(price + comp_price) / 2 < price * 0.99",
+    "action": "max(1.0, price * 0.995)"
+  }
+]
