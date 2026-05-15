@@ -56,3 +56,33 @@ def rule_engine(tmp_path: Path, sample_rules: list[dict]) -> RuleEngine:
     engine = RuleEngine(rules_path=rules_path)
     engine.rules = sample_rules
     return engine
+
+
+@pytest.fixture
+def lgbm_training_df() -> pd.DataFrame:
+    """≥60 дней, вариативные цены — достаточно для обучения LightGBM после лагов."""
+    n = 70
+    dates = pd.date_range("2024-06-01", periods=n, freq="D")
+    prices = 85.0 + 8.0 * np.sin(np.linspace(0, 5 * np.pi, n)) + np.linspace(-4, 4, n)
+    rows = []
+    for d, p in zip(dates, prices):
+        p = float(round(p, 2))
+        s = float(max(5.0, round(420.0 - 2.8 * p)))
+        comp = round(p * 1.02, 2)
+        rev = round(s * p, 2)
+        cogs = 60.0
+        rows.append(
+            {
+                "date": d,
+                "product_id": 1,
+                "product": "Молоко",
+                "our_price": p,
+                "competitor_price": comp,
+                "sales": s,
+                "revenue": rev,
+                "cogs": cogs,
+                "profit": round(rev - s * cogs, 2),
+                "is_oos": False,
+            }
+        )
+    return pd.DataFrame(rows)

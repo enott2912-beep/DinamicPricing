@@ -1,4 +1,4 @@
-# Сводная таблица unit-тестов (P0 + P1)
+# Сводная таблица unit-тестов (P0 + P1 + LightGBM)
 
 Запуск из каталога `DinamicPricing/`:
 
@@ -20,13 +20,15 @@ pytest
 | `test_pricing_regression.py` | `model/pricing.py` (линейная регрессия) | 8 |
 | `test_pricing_forecast.py` | `model/pricing.py` (прогноз, правила) | 3 |
 | `test_data_validation.py` | `ui/data_manager.py` → `_validate_loaded_data` | 5 |
-| **Итого** | | **36** |
+| `test_pricing_lightgbm.py` | `model/pricing.py` (LightGBM) | 9 |
+| **Итого** | | **45** |
 
 ### `conftest.py` (не тесты)
 
 | Фикстура | Назначение |
 |----------|------------|
 | `minimal_sales_df` | 8 дней истории по SKU «Молоко» с согласованными revenue/profit |
+| `lgbm_training_df` | 70 дней с вариативными ценами — достаточно для обучения LightGBM |
 | `sample_rules` | Два правила для `RuleEngine` (первое всегда срабатывает) |
 | `rule_engine` | `RuleEngine` с `sample_rules` во временной директории |
 
@@ -72,8 +74,17 @@ pytest
 | 34 | `test_data_validation.py` | `test_validate_loaded_data_revenue_mismatch` | `_validate_loaded_data` | `revenue` ≠ `sales × our_price` → отклонение. |
 | 35 | `test_data_validation.py` | `test_validate_loaded_data_negative_price` | `_validate_loaded_data` | Отрицательная `our_price` → отклонение. |
 | 36 | `test_data_validation.py` | `test_validate_loaded_data_bad_date` | `_validate_loaded_data` | Неразбираемая дата → отклонение. |
+| 37 | `test_pricing_lightgbm.py` | `test_lgbm_data_warnings_short_history` | `_lgbm_data_warnings` | Короткая история → предупреждение о малом числе наблюдений. |
+| 38 | `test_pricing_lightgbm.py` | `test_build_lgbm_training_frame_filters_oos` | `_build_lgbm_training_frame` | OOS и нулевые sales не попадают в обучающую выборку. |
+| 39 | `test_pricing_lightgbm.py` | `test_fit_lightgbm_short_history_unreliable` | `fit_lightgbm_sales_model` | 8 дней → модель не обучается, `reliable=False`. |
+| 40 | `test_pricing_lightgbm.py` | `test_fit_lightgbm_empty_after_clean` | `fit_lightgbm_sales_model` | Пустой df после очистки → модель `None`. |
+| 41 | `test_pricing_lightgbm.py` | `test_fit_lightgbm_reliable_on_rich_history` | `fit_lightgbm_sales_model` | 70 дней с вариацией цен → модель обучена, `reliable=True`. |
+| 42 | `test_pricing_lightgbm.py` | `test_recommend_price_lightgbm_with_pack_respects_step_limit` | `recommend_price_lightgbm_with_pack` | Рекомендованная цена в пределах дневного лимита ±2%. |
+| 43 | `test_pricing_lightgbm.py` | `test_recommend_price_lightgbm_fallback_when_unreliable` | `recommend_price_lightgbm` | Слабые данные → цена не меняется (hold последней). |
+| 44 | `test_pricing_lightgbm.py` | `test_predict_sales_lightgbm_non_negative` | `predict_sales_lightgbm_with_pack` | Прогноз спроса ≥ 0 при обученной модели. |
+| 45 | `test_pricing_lightgbm.py` | `test_predict_sales_fallback_when_no_model` | `predict_sales_lightgbm_with_pack` | Без модели → среднее sales за 7 дней. |
 
-**Итого: 36 тестов** (P0: 20, P1: 16).
+**Итого: 45 тестов** (P0: 20, P1: 16, LightGBM: 9). Если `lightgbm` не установлен, 9 тестов пропускаются (`pytest.skip`).
 
 ---
 
@@ -83,4 +94,7 @@ pytest
 |-----------|--------|--------|
 | **P0** | `test_math_engine`, `test_rules_validator`, `test_rules_engine` | Формулы спроса и конкурентов; валидация и выполнение Rule Engine |
 | **P1** | `test_pricing_regression`, `test_pricing_forecast`, `test_data_validation` | Линейная регрессия и прогноз; валидация загружаемого CSV |
+| **LightGBM** | `test_pricing_lightgbm` | Обучение, рекомендация цены, прогноз спроса (smoke) |
+
+
 
