@@ -43,13 +43,19 @@ DinamicPricing/
    ```bash
    pip install -r requirements.txt
    ```
-3. **Генерация данных**:
+3. **Unit-тесты** (опционально):
+   ```bash
+   pip install -r requirements-dev.txt
+   pytest
+   ```
+   Сводная таблица «тест → функция»: [TESTS.md](TESTS.md).
+4. **Генерация данных**:
    ```bash
    python generator/generate_data.py
    ```
    Полностью перезаписывает `data/sales_history.csv` и сбрасывает `data/predict_sales.csv` (пустой заголовок), чтобы старые прогнозы не смешивались с новой историей.
 
-4. **Запуск приложения**:
+5. **Запуск приложения**:
    ```bash
    streamlit run ui/streamlit_app.py
    ```
