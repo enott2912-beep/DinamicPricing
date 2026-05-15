@@ -258,6 +258,14 @@ def build_sidebar():
     sid = get_current_session_id()
     sid_short = f"{sid[:8]}...{sid[-8:]}" if sid and len(sid) > 20 else (sid or "n/a")
     st.sidebar.caption(f"Сессия: `{sid_short}`")
+
+    # Кнопка "На главную"
+    if st.sidebar.button("🏠 На главную", use_container_width=True, type="primary"):
+        # Сбрасываем флаг загрузки данных, чтобы показать welcome screen
+        st.session_state["force_welcome"] = True
+        st.cache_data.clear()
+        st.rerun()
+
     s_col1, s_col2 = st.sidebar.columns(2)
     if s_col1.button("🆕 Новая сессия", use_container_width=True):
         start_new_session()
@@ -324,6 +332,13 @@ def main() -> None:
     configure_page()
     get_or_create_session_id()
     uploaded_file, use_uploaded_data, mode_key = build_sidebar()
+
+    # Проверяем флаг принудительного показа welcome screen
+    if st.session_state.get("force_welcome", False):
+        st.session_state.pop("force_welcome", None)
+        render_welcome_screen()
+        st.stop()
+
     df = load_data(uploaded_file, use_uploaded=use_uploaded_data)
 
     if df is None:
