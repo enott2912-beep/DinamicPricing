@@ -21,7 +21,8 @@ pytest
 | `test_pricing_forecast.py` | `model/pricing.py` (прогноз, правила) | 3 |
 | `test_data_validation.py` | `ui/data_manager.py` → `_validate_loaded_data` | 5 |
 | `test_pricing_lightgbm.py` | `model/pricing.py` (LightGBM) | 9 |
-| **Итого** | | **45** |
+| `test_simulate.py` | `model/pricing.py` → `simulate` | 16 |
+| **Итого** | | **61** |
 
 ### `conftest.py` (не тесты)
 
@@ -29,6 +30,8 @@ pytest
 |----------|------------|
 | `minimal_sales_df` | 8 дней истории по SKU «Молоко» с согласованными revenue/profit |
 | `lgbm_training_df` | 70 дней с вариативными ценами — достаточно для обучения LightGBM |
+| `sim_history_df` | 21 день, одна сущность с иерархией store/brand — для `simulate` |
+| `sim_history_multi_entity` | 14 дней, «Молоко» + «Кофе» — фильтр SKU и число строк |
 | `sample_rules` | Два правила для `RuleEngine` (первое всегда срабатывает) |
 | `rule_engine` | `RuleEngine` с `sample_rules` во временной директории |
 
@@ -84,7 +87,24 @@ pytest
 | 44 | `test_pricing_lightgbm.py` | `test_predict_sales_lightgbm_non_negative` | `predict_sales_lightgbm_with_pack` | Прогноз спроса ≥ 0 при обученной модели. |
 | 45 | `test_pricing_lightgbm.py` | `test_predict_sales_fallback_when_no_model` | `predict_sales_lightgbm_with_pack` | Без модели → среднее sales за 7 дней. |
 
-**Итого: 45 тестов** (P0: 20, P1: 16, LightGBM: 9). Если `lightgbm` не установлен, 9 тестов пропускаются (`pytest.skip`).
+| 46 | `test_simulate.py` | `test_simulate_appends_n_steps_days` | `simulate` | После `n_steps` уникальных дат стало ровно на столько больше. |
+| 47 | `test_simulate.py` | `test_simulate_future_dates_after_history_max` | `simulate` | Все новые даты строго позже конца истории. |
+| 48 | `test_simulate.py` | `test_simulate_output_schema` | `simulate` | В будущих строках есть цены, спрос, выручка, прибыль, конкуренты. |
+| 49 | `test_simulate.py` | `test_simulate_invariants` | `simulate` | `our_price ≥ 1`, `sales ≥ 0`, `revenue ≥ 0` на прогнозных днях. |
+| 50 | `test_simulate.py` | `test_simulate_accounting` | `simulate` | `revenue ≈ sales×price`, `profit ≈ revenue − sales×cogs`. |
+| 51 | `test_simulate.py` | `test_simulate_reproducible_rules` | `simulate` | Два прогона `method=rules` с одним df → идентичный будущий хвост (SEED). |
+| 52 | `test_simulate.py` | `test_simulate_empty_or_no_products` | `simulate` | Пустой df или неизвестный SKU → без новых дней / без падения. |
+| 53 | `test_simulate.py` | `test_simulate_target_product_filter` | `simulate` | `target_product` ограничивает прогноз одним SKU. |
+| 54 | `test_simulate.py` | `test_simulate_row_count` | `simulate` | Число прогнозных строк = `n_steps ×` число сущностей. |
+| 55 | `test_simulate.py` | `test_simulate_regression_completes` | `simulate` | `method=regression` завершается на 21 дне истории. |
+| 56 | `test_simulate.py` | `test_simulate_regression_daily_price_step_limit` | `simulate` | Шаг цены между днями в пределах `max_daily_price_change_pct`. |
+| 57 | `test_simulate.py` | `test_simulate_regression_train_window_clipped` | `simulate` | Окно 999 дней при короткой истории не роняет симуляцию. |
+| 58 | `test_simulate.py` | `test_simulate_rules_completes` | `simulate` | `method=rules` smoke на 5 шагов. |
+| 59 | `test_simulate.py` | `test_simulate_rules_with_patched_engine` | `simulate` | С моком правила `price×1.1` первая будущая цена соответствует правилу. |
+| 60 | `test_simulate.py` | `test_simulate_lightgbm_completes` | `simulate` | `method=lightgbm` на длинной истории — без падения, sales ≥ 0. |
+| 61 | `test_simulate.py` | `test_simulate_lightgbm_short_history` | `simulate` | Короткая история + lightgbm — fallback, без падения. |
+
+**Итого: 61 тест** (P0: 20, P1: 16, LightGBM: 9, simulate: 16). Если `lightgbm` не установлен, 11 тестов пропускаются (`pytest.skip`).
 
 ---
 
@@ -95,6 +115,12 @@ pytest
 | **P0** | `test_math_engine`, `test_rules_validator`, `test_rules_engine` | Формулы спроса и конкурентов; валидация и выполнение Rule Engine |
 | **P1** | `test_pricing_regression`, `test_pricing_forecast`, `test_data_validation` | Линейная регрессия и прогноз; валидация загружаемого CSV |
 | **LightGBM** | `test_pricing_lightgbm` | Обучение, рекомендация цены, прогноз спроса (smoke) |
+| **Simulate (P2)** | `test_simulate` | Цикл «история → N дней»: даты, инварианты, rules/regression/lightgbm |
 
+## Не покрыто автотестами
 
+| Область | Комментарий |
+|---------|-------------|
+| **Streamlit UI** | `views`, `app_entry`, графики, `save_predict_file` |
+| **Качество ML на реальных данных** | Сравнение моделей по метрикам на продажах |
 

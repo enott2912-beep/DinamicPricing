@@ -86,3 +86,60 @@ def lgbm_training_df() -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+def _make_sim_row(
+    date: pd.Timestamp,
+    product: str,
+    product_id: int,
+    our_price: float,
+    *,
+    store_id: int = 1,
+    store: str = "TestStore",
+    store_profile: str = "У дома",
+    brand_id: int = 1,
+    brand: str = "TestBrand",
+    cogs: float = 60.0,
+) -> dict:
+    s = float(max(5.0, round(420.0 - 2.8 * our_price)))
+    comp = round(our_price * 1.02, 2)
+    rev = round(s * our_price, 2)
+    return {
+        "date": date,
+        "store_id": store_id,
+        "store": store,
+        "store_profile": store_profile,
+        "brand_id": brand_id,
+        "brand": brand,
+        "product_id": product_id,
+        "product": product,
+        "our_price": float(our_price),
+        "competitor_1_price": round(comp * 1.01, 2),
+        "competitor_2_price": round(comp * 0.99, 2),
+        "competitor_price": comp,
+        "sales": s,
+        "revenue": rev,
+        "cogs": cogs,
+        "profit": round(rev - s * cogs, 2),
+        "is_oos": False,
+    }
+
+
+@pytest.fixture
+def sim_history_df() -> pd.DataFrame:
+    """21 день, одна сущность (магазин × бренд × Молоко) — для simulate."""
+    dates = pd.date_range("2025-03-01", periods=21, freq="D")
+    prices = np.linspace(78, 98, len(dates))
+    rows = [_make_sim_row(d, "Молоко", 1, float(round(p, 2))) for d, p in zip(dates, prices)]
+    return pd.DataFrame(rows)
+
+
+@pytest.fixture
+def sim_history_multi_entity() -> pd.DataFrame:
+    """Две SKU в одном магазине — для проверки фильтра и числа строк."""
+    dates = pd.date_range("2025-04-01", periods=14, freq="D")
+    rows = []
+    for d in dates:
+        rows.append(_make_sim_row(d, "Молоко", 1, 85.0))
+        rows.append(_make_sim_row(d, "Кофе", 4, 450.0, cogs=280.0))
+    return pd.DataFrame(rows)
