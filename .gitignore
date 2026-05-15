@@ -21,3 +21,6 @@ predict*
 # IDEs
 .vscode/
 .idea/
+
+# Streamlit secrets (never commit!)
+.streamlit/secrets.toml
