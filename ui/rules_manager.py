@@ -1,7 +1,18 @@
 import json
+import time
+
 import streamlit as st
-import pandas as pd
 from model.rules_engine import get_rule_engine
+
+
+def _save_rules_safe(engine, rules: list[dict]) -> bool:
+    try:
+        engine.save_rules(rules)
+        return True
+    except (ValueError, RuntimeError) as exc:
+        st.error(str(exc))
+        return False
+
 
 def render_rules_manager_inline():
     """
@@ -29,11 +40,10 @@ def render_rules_manager_inline():
                     
                     if st.button("🗑 Удалить правило", key=f"del_rule_{i}"):
                         rules.pop(i)
-                        engine.save_rules(rules)
-                        st.success("Правило удалено!")
-                        import time
-                        time.sleep(0.5)
-                        st.rerun()
+                        if _save_rules_safe(engine, rules):
+                            st.success("Правило удалено!")
+                            time.sleep(0.5)
+                            st.rerun()
 
     with t2:
         st.write("Заполните форму для добавления нового правила (оно добавится в конец списка).")
@@ -58,11 +68,10 @@ def render_rules_manager_inline():
                     }
                     rules_copy = list(engine.rules)
                     rules_copy.append(new_rule)
-                    engine.save_rules(rules_copy)
-                    st.success("Правило успешно добавлено!")
-                    import time
-                    time.sleep(0.5)
-                    st.rerun()
+                    if _save_rules_safe(engine, rules_copy):
+                        st.success("Правило успешно добавлено!")
+                        time.sleep(0.5)
+                        st.rerun()
                 else:
                     st.error("Поля 'Название', 'Условие' и 'Действие' обязательны.")
 
@@ -82,11 +91,10 @@ def render_rules_manager_inline():
                             data = json.loads(content)
                             st.json(data)
                             if st.button("Восстановить эту версию", key=f"restore_{f.name}"):
-                                engine.save_rules(data)
-                                st.success(f"Правила восстановлены из {f.name}!")
-                                import time
-                                time.sleep(0.5)
-                                st.rerun()
+                                if _save_rules_safe(engine, data):
+                                    st.success(f"Правила восстановлены из {f.name}!")
+                                    time.sleep(0.5)
+                                    st.rerun()
                         except Exception as e:
                             st.write(f"Ошибка чтения файла: {e}")
         

@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+from model.utils import parse_is_oos_series
 from pandas.errors import EmptyDataError
 from ui.session_store import (
     clear_predict_df,
@@ -113,7 +115,11 @@ def _validate_loaded_data(df: pd.DataFrame) -> pd.DataFrame | None:
         return None
 
     if "is_oos" in out.columns:
-        out["is_oos"] = out["is_oos"].astype(bool)
+        try:
+            out["is_oos"] = parse_is_oos_series(out["is_oos"])
+        except ValueError as exc:
+            st.error(f"В CSV некорректные значения в колонке `is_oos`: {exc}")
+            return None
     sort_cols = [c for c in ["date", "store", "brand", "product"] if c in out.columns]
     if not sort_cols:
         sort_cols = ["date", "product"]

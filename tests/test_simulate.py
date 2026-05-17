@@ -98,7 +98,7 @@ def test_simulate_empty_or_no_products():
     empty = pd.DataFrame(columns=["date", "product", "our_price", "sales", "revenue", "cogs", "profit"])
     assert simulate(empty, n_steps=5, method="rules").empty
 
-    unknown = pd.DataFrame(
+    custom = pd.DataFrame(
         [
             {
                 "date": "2025-01-01",
@@ -111,8 +111,9 @@ def test_simulate_empty_or_no_products():
             }
         ]
     )
-    out = simulate(_as_dates(unknown), n_steps=3, method="rules")
-    assert out["date"].nunique() == 1
+    out = simulate(_as_dates(custom), n_steps=3, method="rules")
+    assert out["date"].nunique() == 4
+    assert (out[out["date"] > pd.Timestamp("2025-01-01")]["product"] == "НеизвестныйТовар").all()
 
 
 def test_simulate_target_product_filter(sim_history_multi_entity: pd.DataFrame):
