@@ -24,3 +24,6 @@ predict*
 
 # Streamlit secrets (never commit!)
 .streamlit/secrets.toml
+
+#Jupyter
+.ipynb_checkpoints/
