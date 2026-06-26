@@ -34,28 +34,78 @@ class RuleEngine:
 
     def load_rules(self) -> list[dict]:
         if self.session_id:
-            try:
-                from ui.session_store import load_rules as load_rules_for_session
+            from ui.session_store import load_rules as load_rules_for_session
 
+            try:
                 session_rules = load_rules_for_session(self.session_id)
-                if session_rules is not None:
-                    return session_rules
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.exception("Не удалось загрузить правила сессии %s", self.session_id)
+                raise RuntimeError(
+                    "Не удалось загрузить правила сессии из базы данных. Повторите попытку позже."
+                ) from exc
+            if session_rules is not None:
+                return session_rules
+            # В сессии ещё нет своих правил — подставляем глобальный шаблон из файла.
+            return self._load_rules_from_file()
+
+        return self._load_rules_from_file()
+
+    def _load_rules_from_file(self) -> list[dict]:
         if not self.rules_path.exists():
             return []
         try:
             with open(self.rules_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Ошибка загрузки правил: {e}")
+            logger.error("Ошибка загрузки правил из %s: %s", self.rules_path, e)
             return []
+
+    def _backup_session_rules_to_history(self, old_rules: list[dict]) -> None:
+        if not old_rules:
+            return
+        HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        sid = (self.session_id or "nosession")[:8]
+        backup_path = HISTORY_DIR / f"rules_session_{sid}_{timestamp}.json"
+        with open(backup_path, "w", encoding="utf-8") as f:
+            json.dump(old_rules, f, ensure_ascii=False, indent=2)
+
+    def _save_rules_to_session(self, new_rules: list[dict]) -> None:
+        from ui.session_store import load_rules as load_rules_for_session
+        from ui.session_store import save_rules as save_rules_for_session
+
+        try:
+            old_rules = load_rules_for_session(self.session_id) or []
+            self._backup_session_rules_to_history(old_rules)
+            save_rules_for_session(self.session_id, new_rules)
+        except Exception as exc:
+            logger.exception("Не удалось сохранить правила сессии %s", self.session_id)
+            raise RuntimeError(
+                "Не удалось сохранить правила сессии в базу данных. Глобальный файл правил не изменён."
+            ) from exc
+        self.rules = new_rules
+
+    def _save_rules_to_file(self, new_rules: list[dict]) -> None:
+        if self.rules_path.exists():
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = HISTORY_DIR / f"rules_{timestamp}.json"
+            try:
+                import shutil
+
+                shutil.copy2(self.rules_path, backup_path)
+            except Exception as e:
+                logger.warning("Ошибка создания бэкапа правил: %s", e)
+
+        self.rules_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.rules_path, "w", encoding="utf-8") as f:
+            json.dump(new_rules, f, ensure_ascii=False, indent=2)
+        self.rules = new_rules
 
     def save_rules(self, new_rules: list[dict]):
         """Сохраняет правила и создает backup в rules_history."""
         from model.rules_validator import validate_rules_list
 
-        # Валидация перед сохранением
         is_valid, errors = validate_rules_list(new_rules)
         if not is_valid:
             error_msg = "Ошибки валидации правил:\n" + "\n".join(errors)
@@ -63,40 +113,10 @@ class RuleEngine:
             raise ValueError(error_msg)
 
         if self.session_id:
-            try:
-                from ui.session_store import load_rules as load_rules_for_session
-                from ui.session_store import save_rules as save_rules_for_session
+            self._save_rules_to_session(new_rules)
+            return
 
-                old_rules = load_rules_for_session(self.session_id) or []
-                if old_rules:
-                    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-                    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                    backup_path = HISTORY_DIR / f"rules_{timestamp}.json"
-                    with open(backup_path, "w", encoding="utf-8") as f:
-                        json.dump(old_rules, f, ensure_ascii=False, indent=2)
-                save_rules_for_session(self.session_id, new_rules)
-                self.rules = new_rules
-                return
-            except Exception:
-                pass
-
-        # 1. Если файл существует, бэкапим его
-        if self.rules_path.exists():
-            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = HISTORY_DIR / f"rules_{timestamp}.json"
-            try:
-                import shutil
-                shutil.copy2(self.rules_path, backup_path)
-            except Exception as e:
-                print(f"Ошибка создания бэкапа правил: {e}")
-
-        # 2. Сохраняем новые
-        self.rules_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.rules_path, "w", encoding="utf-8") as f:
-            json.dump(new_rules, f, ensure_ascii=False, indent=2)
-        
-        self.rules = new_rules
+        self._save_rules_to_file(new_rules)
 
     def evaluate(self, context: dict) -> tuple[float, str]:
         """
@@ -158,7 +178,6 @@ class RuleEngine:
 
         return round(float(context.get("price", 0.0)), 2), "hold"
 
-        return round(float(context.get("price", 0.0)), 2), "hold"
 
 def get_rule_engine() -> RuleEngine:
     session_id = _resolve_session_id_from_streamlit()

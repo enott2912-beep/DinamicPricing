@@ -1,9 +1,18 @@
+import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from model.rules_engine import RuleEngine
 from model.rules_validator import validate_rules_list
+
+SAMPLE_RULE = {
+    "name": "test_rule",
+    "description": "Test",
+    "condition": "price > 0",
+    "action": "price * 1.01",
+}
 
 
 def test_rule_engine_evaluate_first_matching_rule(rule_engine: RuleEngine):
@@ -102,3 +111,53 @@ def test_rule_engine_save_rules_rejects_invalid(tmp_path: Path):
     assert is_valid is False
     with pytest.raises(ValueError, match="валидац"):
         engine.save_rules(invalid)
+
+
+def test_save_rules_without_session_writes_file(tmp_path: Path):
+    rules_path = tmp_path / "rules.json"
+    engine = RuleEngine(rules_path=rules_path)
+    engine.save_rules([SAMPLE_RULE])
+    saved = json.loads(rules_path.read_text(encoding="utf-8"))
+    assert saved[0]["name"] == "test_rule"
+
+
+def test_save_rules_session_db_failure_does_not_touch_global_file(tmp_path: Path):
+    rules_path = tmp_path / "rules.json"
+    global_rules = [{"name": "global_default", "condition": "price > 0", "action": "price"}]
+    rules_path.write_text(json.dumps(global_rules), encoding="utf-8")
+
+    engine = RuleEngine(rules_path=rules_path, session_id="sess-fail-test")
+    user_rules = [{"name": "user_private", "condition": "price > 1", "action": "price * 2"}]
+
+    with patch("ui.session_store.save_rules", side_effect=OSError("db locked")):
+        with pytest.raises(RuntimeError, match="базу данных"):
+            engine.save_rules(user_rules)
+
+    assert json.loads(rules_path.read_text(encoding="utf-8")) == global_rules
+
+
+def test_load_rules_session_db_failure_raises(tmp_path: Path):
+    engine = RuleEngine(rules_path=tmp_path / "rules.json", session_id="sess-load-fail")
+
+    with patch("ui.session_store.load_rules", side_effect=OSError("db unavailable")):
+        with pytest.raises(RuntimeError, match="загрузить правила сессии"):
+            engine.load_rules()
+
+
+def test_save_rules_session_success_uses_db(tmp_path: Path):
+    rules_path = tmp_path / "rules.json"
+    rules_path.write_text("[]", encoding="utf-8")
+    session_id = "sess-ok-test"
+
+    from ui import session_store
+
+    session_store.init_db()
+    session_store._ensure_session_row(session_id)
+
+    engine = RuleEngine(rules_path=rules_path, session_id=session_id)
+    engine.save_rules([SAMPLE_RULE])
+
+    loaded = session_store.load_rules(session_id)
+    assert loaded is not None
+    assert loaded[0]["name"] == "test_rule"
+    assert json.loads(rules_path.read_text(encoding="utf-8")) == []

@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from model.pricing import PRODUCTS, apply_rules, forecast
+from model.pricing import PRODUCTS, apply_rules, forecast, infer_entity_params
 
 
 def test_forecast_with_regression_params():
@@ -17,6 +17,20 @@ def test_forecast_without_regression_uses_products():
     price = p["base_price"] + 10.0
     result = forecast("Молоко", recommended_price=price, current_metric=500.0, regression_params=None)
     expected_sales = max(0, round(p["base_sales"] - p["elasticity"] * 10.0))
+    assert result["forecast_sales"] == expected_sales
+
+
+def test_forecast_without_regression_uses_inferred_params(minimal_sales_df):
+    params = infer_entity_params(minimal_sales_df, "Молоко")
+    price = params["base_price"] + 10.0
+    result = forecast(
+        "Молоко",
+        recommended_price=price,
+        current_metric=500.0,
+        regression_params=None,
+        product_params=params,
+    )
+    expected_sales = max(0, round(params["base_sales"] - params["elasticity"] * 10.0))
     assert result["forecast_sales"] == expected_sales
 
 

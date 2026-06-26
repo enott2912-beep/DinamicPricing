@@ -2,7 +2,48 @@
 Вспомогательные функции для аналитики и расчетов.
 """
 import numpy as np
+import pandas as pd
 from collections import Counter
+
+# True = товар отсутствует (out of stock)
+_IS_OOS_TRUE = frozenset({
+    "1", "true", "t", "yes", "y", "да", "д", "on",
+    "oos", "out of stock", "out-of-stock", "outofstock",
+    "нет в наличии", "отсутствует", "отсутствие", "недоступен",
+})
+_IS_OOS_FALSE = frozenset({
+    "", "0", "false", "f", "no", "n", "нет", "off",
+    "in stock", "instock", "available", "в наличии", "есть",
+})
+
+
+def parse_is_oos_value(value) -> bool:
+    """Разбор одного значения is_oos (не использовать .astype(bool) для строк)."""
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return False
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, np.integer)):
+        return int(value) != 0
+    if isinstance(value, (float, np.floating)):
+        return float(value) != 0.0
+
+    text = str(value).strip().lower()
+    if text in _IS_OOS_FALSE:
+        return False
+    if text in _IS_OOS_TRUE:
+        return True
+    try:
+        return float(text.replace(",", ".")) != 0.0
+    except ValueError as exc:
+        raise ValueError(f"Не удалось разобрать is_oos: {value!r}") from exc
+
+
+def parse_is_oos_series(series: pd.Series) -> pd.Series:
+    """Приводит колонку is_oos к bool: True — нет в наличии."""
+    if series.dtype == bool:
+        return series
+    return series.map(parse_is_oos_value).astype(bool)
 
 
 def safe_growth_pct(predicted: float, actual: float) -> float:

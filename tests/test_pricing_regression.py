@@ -5,6 +5,7 @@ from model.pricing import (
     PRODUCTS,
     _fit_linear_sales_vs_price,
     fit_regression,
+    infer_entity_params,
     predict_sales_regression,
     products_in_dataframe,
 )
@@ -71,5 +72,17 @@ def test_products_in_dataframe_order(minimal_sales_df: pd.DataFrame):
         ignore_index=True,
     )
     result = products_in_dataframe(df)
-    product_keys = list(PRODUCTS.keys())
-    assert result == [p for p in product_keys if p in {"Молоко", "Кофе"}]
+    assert result == ["Кофе", "Молоко"]
+
+
+def test_products_in_dataframe_custom_sku(minimal_sales_df: pd.DataFrame):
+    df = minimal_sales_df.assign(product="Яблоко", product_id=99)
+    assert products_in_dataframe(df) == ["Яблоко"]
+
+
+def test_infer_entity_params_from_history(minimal_sales_df: pd.DataFrame):
+    params = infer_entity_params(minimal_sales_df, "Молоко")
+    assert params["base_price"] > 0
+    assert params["base_sales"] > 0
+    assert params["elasticity"] > 0
+    assert params["cogs"] == 60.0

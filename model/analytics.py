@@ -7,6 +7,7 @@ from model.pricing import (
     fit_regression,
     fit_regression_aggregate_daily,
     forecast,
+    infer_entity_params,
     products_in_dataframe,
     recommend_price_lightgbm,
 )
@@ -15,6 +16,7 @@ from model.utils import (
     safe_mean_or_none,
     format_rule_names,
     safe_all_check,
+    parse_is_oos_series,
 )
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ ENTITY_KEYS = ("store_id", "store", "store_profile", "brand_id", "brand", "produ
 
 def _exclude_oos_rows(df: pd.DataFrame) -> pd.DataFrame:
     if "is_oos" in df.columns:
-        return df[~df["is_oos"].astype(bool)].copy()
+        return df[~parse_is_oos_series(df["is_oos"])].copy()
     return df.copy()
 
 
@@ -110,13 +112,16 @@ def get_recommendations_all_products(prod_df: pd.DataFrame, work_df: pd.DataFram
             last_prices.append(float(last_i["our_price"]))
 
             rp, rn = apply_rules(last_i, avg7)
-            fc_r = forecast(p, rp, current_profit_ent)
+            ent_params = infer_entity_params(ent_valid, p)
+            fc_r = forecast(p, rp, current_profit_ent, product_params=ent_params)
             rule_prices.append(float(rp))
             rule_names.append(rn)
             pred_rules_sum += float(fc_r["forecast_profit"])
 
             a_i, b_i, opt_i, rel_i = fit_regression(ent_valid, p)
-            fc_g = forecast(p, opt_i, current_profit_ent, regression_params=(a_i, b_i))
+            fc_g = forecast(
+                p, opt_i, current_profit_ent, regression_params=(a_i, b_i), product_params=ent_params
+            )
             reg_prices.append(float(opt_i))
             reg_rel_entity.append(bool(rel_i))
             reg_a_vals.append(float(a_i))
@@ -263,13 +268,22 @@ def get_recommendations_single_product(
         last_cogs_values.append(float(last_row_ent.get("cogs", 0.0)))
 
         rec_price_ent, rule_name_ent = apply_rules(last_row_ent, avg7)
-        fc_rules_ent = forecast(selected_product, rec_price_ent, current_profit_ent)
+        ent_params = infer_entity_params(ent_used, selected_product)
+        fc_rules_ent = forecast(
+            selected_product, rec_price_ent, current_profit_ent, product_params=ent_params
+        )
         rule_prices.append(float(rec_price_ent))
         rule_names.append(rule_name_ent)
         pred_rules_sum += float(fc_rules_ent["forecast_profit"])
 
         a_ent, b_ent, opt_price_ent, rel_ent = fit_regression(ent_used, selected_product)
-        fc_reg_ent = forecast(selected_product, opt_price_ent, current_profit_ent, regression_params=(a_ent, b_ent))
+        fc_reg_ent = forecast(
+            selected_product,
+            opt_price_ent,
+            current_profit_ent,
+            regression_params=(a_ent, b_ent),
+            product_params=ent_params,
+        )
         reg_prices.append(float(opt_price_ent))
         reg_rel_flags.append(bool(rel_ent))
         reg_a_vals.append(float(a_ent))

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import logging
+import zlib
 from dataclasses import dataclass
 
 from model.math_engine import (
@@ -10,6 +11,7 @@ from model.math_engine import (
     calc_demand_rules,
 )
 from model.rules_engine import get_rule_engine
+from model.utils import parse_is_oos_series
 from sklearn.linear_model import LinearRegression
 try:
     from lightgbm import LGBMRegressor
@@ -43,6 +45,7 @@ SEASONALITY_PHASE = {
 LGBM_MIN_ROWS = 60
 LGBM_MIN_UNIQUE_PRICES = 8
 LGBM_MIN_PRICE_STD = 1.0
+DEFAULT_ELASTICITY = 2.0
 
 
 @dataclass
@@ -73,7 +76,7 @@ def _lgbm_data_warnings(df: pd.DataFrame) -> list[str]:
 def _build_lgbm_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     work = df.copy()
     if "is_oos" in work.columns:
-        work = work[~work["is_oos"].astype(bool)]
+        work = work[~parse_is_oos_series(work["is_oos"])]
     work = work[work["sales"] > 0].copy()
     if work.empty:
         return work
@@ -300,7 +303,7 @@ def fit_regression(df: pd.DataFrame, product: str) -> tuple[float, float, float,
     """
     prod_data = df[df['product'] == product].copy()
     if "is_oos" in prod_data.columns:
-        prod_data = prod_data[~prod_data["is_oos"].astype(bool)]
+        prod_data = prod_data[~parse_is_oos_series(prod_data["is_oos"])]
     prod_data = prod_data[prod_data["sales"] > 0]
     if len(prod_data) < 3:
         fallback = float(prod_data['our_price'].mean()) if len(prod_data) else 0.0
@@ -323,7 +326,7 @@ def fit_regression_aggregate_daily(work_df: pd.DataFrame) -> tuple[float, float,
     """
     clean_df = work_df.copy()
     if "is_oos" in clean_df.columns:
-        clean_df = clean_df[~clean_df["is_oos"].astype(bool)]
+        clean_df = clean_df[~parse_is_oos_series(clean_df["is_oos"])]
     clean_df = clean_df[clean_df["sales"] > 0]
     if len(clean_df) < 3:
         fb = float(work_df['our_price'].mean()) if len(work_df) else 0.0
@@ -344,25 +347,94 @@ def predict_sales_regression(a: float, b: float, price: float, noise: float = 0.
     return max(0, int(round(a - b * float(price) + float(noise))))
 
 
+def _stable_product_id(name: str) -> int:
+    return int(zlib.crc32(name.encode("utf-8")) % 900_000) + 100_000
+
+
+def infer_entity_params(hist: pd.DataFrame, product: str | None = None) -> dict:
+    """
+    Оценка base_price, base_sales, elasticity и cogs по истории сущности (для загруженного CSV).
+    PRODUCTS используется только как запасной вариант при пустой истории.
+    """
+    if product is None and "product" in hist.columns and not hist.empty:
+        product = str(hist["product"].iloc[0])
+
+    work = hist.copy()
+    if "is_oos" in work.columns:
+        work = work[~parse_is_oos_series(work["is_oos"])]
+    work = work[work["sales"] > 0]
+
+    if work.empty:
+        if product and product in PRODUCTS:
+            return dict(PRODUCTS[product])
+        return {
+            "id": _stable_product_id(product or ""),
+            "base_price": 0.0,
+            "base_sales": 0.0,
+            "elasticity": DEFAULT_ELASTICITY,
+            "cogs": 0.0,
+        }
+
+    base_price = float(work["our_price"].median())
+    base_sales = float(work["sales"].median())
+    cogs = float(work["cogs"].mean()) if "cogs" in work.columns else 0.0
+
+    if "product_id" in work.columns and work["product_id"].notna().any():
+        pid = int(work["product_id"].iloc[-1])
+    elif product and product in PRODUCTS:
+        pid = int(PRODUCTS[product]["id"])
+    else:
+        pid = _stable_product_id(str(product or ""))
+
+    elasticity = DEFAULT_ELASTICITY
+    if len(work) >= 3:
+        _, b, _, reliable = _fit_linear_sales_vs_price(
+            work["our_price"].values.astype(float),
+            work["sales"].values.astype(float),
+            base_price,
+            cogs,
+        )
+        if reliable and b > 0:
+            elasticity = max(0.2, float(b))
+
+    return {
+        "id": pid,
+        "base_price": base_price,
+        "base_sales": base_sales,
+        "elasticity": elasticity,
+        "cogs": cogs,
+    }
+
+
 def products_in_dataframe(df: pd.DataFrame) -> list[str]:
-    """SKU из PRODUCTS, по которым есть строки в df (устойчивый порядок)."""
-    return [p for p in PRODUCTS if not df.loc[df['product'] == p].empty]
+    """Уникальные SKU из df (стабильная сортировка по имени)."""
+    if df is None or df.empty or "product" not in df.columns:
+        return []
+    names = df["product"].dropna().astype(str).str.strip()
+    return sorted(n for n in names.unique().tolist() if n)
 
 
-def forecast(product: str, recommended_price: float, current_metric: float, regression_params: tuple = None) -> dict:
+def forecast(
+    product: str,
+    recommended_price: float,
+    current_metric: float,
+    regression_params: tuple = None,
+    product_params: dict | None = None,
+) -> dict:
     """
     Прогноз выручки и прибыли (DRY: заменяет две старые функции).
-    Если переданы regression_params = (a, b), используется регрессия. Иначе — базовая эластичность (PRODUCTS).
+    Если переданы regression_params = (a, b), используется регрессия.
+    Иначе — эвристика по product_params или PRODUCTS.
     """
-    p = PRODUCTS.get(product, {})
-    cogs = p.get('cogs', 0)
+    p = product_params if product_params is not None else PRODUCTS.get(product, {})
+    cogs = p.get("cogs", 0)
 
     if regression_params:
         a, b = regression_params
         pred_sales = max(0, round(a - b * recommended_price))
     else:
-        price_dev = recommended_price - p.get('base_price', 0)
-        pred_sales = max(0, round(p.get('base_sales', 0) - p.get('elasticity', 0) * price_dev))
+        price_dev = recommended_price - p.get("base_price", 0)
+        pred_sales = max(0, round(p.get("base_sales", 0) - p.get("elasticity", 0) * price_dev))
 
     pred_revenue = pred_sales * recommended_price
     pred_profit = pred_sales * (recommended_price - cogs)
@@ -404,7 +476,7 @@ def simulate(
     if target_product and target_product != "Все товары":
         present_products = [target_product]
     else:
-        present_products = [p for p in PRODUCTS if (sim_df['product'] == p).any()]
+        present_products = products_in_dataframe(sim_df)
 
     if not present_products:
         return sim_df
@@ -420,15 +492,12 @@ def simulate(
     if n_entities == 0:
         return sim_df
 
-    products_by_entity = entities_df['product'].tolist()
-    base_prices = np.array([PRODUCTS[p]['base_price'] for p in products_by_entity], dtype=float)
-    base_sales = np.array([PRODUCTS[p]['base_sales'] for p in products_by_entity], dtype=float)
-    elasticities = np.array([PRODUCTS[p]['elasticity'] for p in products_by_entity], dtype=float)
-    cogs = np.array([PRODUCTS[p].get('cogs', 0.0) for p in products_by_entity], dtype=float)
-    if 'product_id' in entities_df.columns:
-        product_ids = entities_df['product_id'].to_numpy()
-    else:
-        product_ids = np.array([PRODUCTS[p]['id'] for p in products_by_entity])
+    products_by_entity = entities_df["product"].tolist()
+    base_prices = np.zeros(n_entities, dtype=float)
+    base_sales = np.zeros(n_entities, dtype=float)
+    elasticities = np.zeros(n_entities, dtype=float)
+    cogs = np.zeros(n_entities, dtype=float)
+    product_ids = np.zeros(n_entities, dtype=int)
 
     reg_a = np.zeros(n_entities, dtype=float)
     reg_b = np.zeros(n_entities, dtype=float)
@@ -456,10 +525,25 @@ def simulate(
         for h_col in hierarchy_cols:
             mask &= sim_df[h_col] == entity[h_col]
         hist = sim_df[mask]
+        params = infer_entity_params(hist, str(entity["product"]))
+        base_prices[i] = float(params["base_price"])
+        base_sales[i] = float(params["base_sales"])
+        elasticities[i] = float(params["elasticity"])
+        cogs[i] = float(params.get("cogs", 0.0))
+        product_ids[i] = int(params["id"])
         if not hist.empty:
-            last_our_prices[i] = float(hist['our_price'].iloc[-1])
-            last_comp_1_prices[i] = float(hist.get('competitor_1_price', hist['competitor_price']).iloc[-1])
-            last_comp_2_prices[i] = float(hist.get('competitor_2_price', hist['competitor_price']).iloc[-1])
+            last_our = float(hist["our_price"].iloc[-1])
+            last_our_prices[i] = last_our
+            if "competitor_price" in hist.columns:
+                comp_ref = hist["competitor_price"]
+            else:
+                comp_ref = hist["our_price"]
+            last_comp_1_prices[i] = float(
+                hist["competitor_1_price"].iloc[-1] if "competitor_1_price" in hist.columns else comp_ref.iloc[-1]
+            )
+            last_comp_2_prices[i] = float(
+                hist["competitor_2_price"].iloc[-1] if "competitor_2_price" in hist.columns else comp_ref.iloc[-1]
+            )
             last_sales[i] = float(hist['sales'].iloc[-1])
             hs_vals = hist['sales'].values
             if len(hs_vals) >= 7:
@@ -469,10 +553,13 @@ def simulate(
                 sales_buffer[:-len(hs_vals), i] = hs_vals.mean() if len(hs_vals) > 0 else 0
             history_prices[i] = hist['our_price'].to_numpy(dtype=float)
             history_sales[i] = hist['sales'].to_numpy(dtype=float)
-            history_comp_prices[i] = hist.get('competitor_price', hist['our_price']).to_numpy(dtype=float)
+            if "competitor_price" in hist.columns:
+                history_comp_prices[i] = hist["competitor_price"].to_numpy(dtype=float)
+            else:
+                history_comp_prices[i] = hist["our_price"].to_numpy(dtype=float)
             history_dates[i] = pd.to_datetime(hist['date']).to_numpy(dtype="datetime64[ns]")
             if 'is_oos' in hist.columns:
-                history_oos[i] = hist['is_oos'].astype(bool).to_numpy()
+                history_oos[i] = parse_is_oos_series(hist["is_oos"]).to_numpy()
             else:
                 history_oos[i] = np.zeros(len(hist), dtype=bool)
         reg_target_prices[i] = last_our_prices[i]
