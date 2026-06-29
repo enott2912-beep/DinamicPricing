@@ -56,6 +56,17 @@ SEASONALITY_PHASE = {
 
 OOS_PROBABILITY = 0.05
 
+SEGMENT_LEN_MIN = 7
+SEGMENT_LEN_MAX = 21
+SEGMENT_AMPLITUDE = {
+    "Кофе": 0.25,
+    "Сок": 0.18,
+    "Шоколад": 0.15,
+    "Молоко": 0.08,
+    "Хлеб": 0.08,
+}
+DEFAULT_AMPLITUDE = 0.08
+
 
 def _build_entity_df(rng: np.random.Generator) -> pd.DataFrame:
     product_names = list(PRODUCTS.keys())
@@ -147,17 +158,52 @@ def _finalize_dataframe(
     return df.sort_values(['date', 'store', 'brand', 'product']).reset_index(drop=True)
 
 
-def _simulate_prices(entity_df: pd.DataFrame, n_days: int, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _simulate_prices_segmented(
+    entity_df: pd.DataFrame,
+    n_days: int,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Генерирует автокоррелированные сегменты цен вместо независимого дневного шума."""
+    n_entities = len(entity_df)
+    base_prices = entity_df["base_price"].to_numpy(dtype=float)
+    price_bias = entity_df["our_price_bias"].to_numpy(dtype=float)
+    products = entity_df["product"].to_numpy()
+    our_prices = np.zeros((n_days, n_entities))
+
+    for entity_idx in range(n_entities):
+        amplitude = SEGMENT_AMPLITUDE.get(str(products[entity_idx]), DEFAULT_AMPLITUDE)
+        day = 0
+        while day < n_days:
+            segment_len = int(rng.integers(SEGMENT_LEN_MIN, SEGMENT_LEN_MAX + 1))
+            segment_len = min(segment_len, n_days - day)
+            price_shift = rng.uniform(-amplitude, amplitude)
+            segment_base = base_prices[entity_idx] * price_bias[entity_idx] * (1.0 + price_shift)
+            intra_segment_noise = rng.uniform(0.985, 1.015, size=segment_len)
+            our_prices[day:day + segment_len, entity_idx] = np.round(segment_base * intra_segment_noise, 2)
+            day += segment_len
+
+    return our_prices
+
+
+def _simulate_prices(
+    entity_df: pd.DataFrame,
+    n_days: int,
+    rng: np.random.Generator,
+    use_legacy: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     n_entities = len(entity_df)
     base_prices_entities = entity_df["base_price"].to_numpy(dtype=float)
-    base_price_mat = np.tile(base_prices_entities, (n_days, 1))
-    our_price_bias = entity_df["our_price_bias"].to_numpy(dtype=float)
-    our_prices = np.round(
-        base_price_mat
-        * np.tile(our_price_bias, (n_days, 1))
-        * rng.uniform(0.92, 1.08, size=(n_days, n_entities)),
-        2,
-    )
+    if use_legacy:
+        base_price_mat = np.tile(base_prices_entities, (n_days, 1))
+        our_price_bias = entity_df["our_price_bias"].to_numpy(dtype=float)
+        our_prices = np.round(
+            base_price_mat
+            * np.tile(our_price_bias, (n_days, 1))
+            * rng.uniform(0.92, 1.08, size=(n_days, n_entities)),
+            2,
+        )
+    else:
+        our_prices = _simulate_prices_segmented(entity_df, n_days, rng)
 
     comp1_base = base_prices_entities * 1.03
     comp2_base = base_prices_entities * 0.93
@@ -292,6 +338,47 @@ def generate_all_data_nonlinear(n_days: int, start_date: datetime) -> pd.DataFra
         oos_mask,
         sales,
     )
+
+
+def generate_elasticity_validation_data(
+    product: str = "Сок",
+    store: str = "СеверМаркет",
+    n_steps: int = 6,
+    days_per_step: int = 14,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Контролируемые ступенчатые изменения цены для проверки эластичности."""
+    if product not in PRODUCTS:
+        raise ValueError(f"Неизвестный продукт: {product}. Допустимы: {list(PRODUCTS)}")
+
+    product_cfg = PRODUCTS[product]
+    base_price = product_cfg["base_price"]
+    base_sales = product_cfg["base_sales"]
+    elasticity = product_cfg["elasticity"]
+    true_b = elasticity * base_sales / base_price
+
+    rng = np.random.default_rng(seed)
+    shifts = np.linspace(-0.25, 0.25, n_steps)
+    records = []
+
+    for step_idx, shift in enumerate(shifts):
+        price = base_price * (1.0 + shift)
+        for day in range(days_per_step):
+            noise = rng.normal(0, base_sales * 0.03)
+            sales = max(0.0, base_sales - true_b * (price - base_price) + noise)
+            records.append({
+                "date": pd.Timestamp("2024-01-01") + pd.Timedelta(days=step_idx * days_per_step + day),
+                "store": store,
+                "product": product,
+                "our_price": round(float(price), 2),
+                "competitor_price": round(float(base_price), 2),
+                "sales": round(float(sales), 1),
+                "cogs": round(float(base_price * 0.6), 2),
+                "is_oos": False,
+                "true_B": round(float(true_b), 4),
+            })
+
+    return pd.DataFrame(records)
 
 
 def save_data(df: pd.DataFrame, path: Path) -> None:
