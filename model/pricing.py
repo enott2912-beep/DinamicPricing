@@ -13,6 +13,7 @@ from model.math_engine import (
 from model.rules_engine import get_rule_engine
 from model.utils import parse_is_oos_series
 from sklearn.linear_model import LinearRegression
+from sklearn.metrics import r2_score
 try:
     from lightgbm import LGBMRegressor
 except Exception:  # pragma: no cover - fallback если пакет не установлен
@@ -46,6 +47,14 @@ LGBM_MIN_ROWS = 60
 LGBM_MIN_UNIQUE_PRICES = 8
 LGBM_MIN_PRICE_STD = 1.0
 DEFAULT_ELASTICITY = 2.0
+
+# Пороги надёжности линейной регрессии Sales ≈ A - B*Price.
+# Раньше проверялся только знак коэффициента — что пропускало модели
+# с отрицательным R^2 на разреженных/шумных данных (см. валидацию на внешнем
+# датасете Retail Price Optimization, Kaggle). Теперь дополнительно проверяем
+# качество фита и минимальное число точек.
+MIN_POINTS_FOR_RELIABLE_FIT = 5
+MIN_R2_FOR_RELIABLE_FIT = 0.25
 
 
 @dataclass
@@ -94,7 +103,59 @@ def _build_lgbm_training_frame(df: pd.DataFrame) -> pd.DataFrame:
     return work.dropna().copy()
 
 
-def fit_lightgbm_sales_model(df: pd.DataFrame) -> LGBMModelPack:
+LGBM_TUNE_MIN_ROWS = 90  # тюнинг имеет смысл только при заметном объёме данных
+LGBM_TUNE_N_ITER = 4
+LGBM_DEFAULT_PARAMS = dict(
+    n_estimators=180,
+    learning_rate=0.05,
+    num_leaves=31,
+    max_depth=-1,
+    min_child_samples=20,
+    subsample=0.85,
+    colsample_bytree=0.85,
+)
+
+
+def _tune_lgbm_params(X: pd.DataFrame, y: pd.Series) -> dict:
+    """
+    Лёгкий перенос идеи из notebooks/01_model_training_and_evaluation.ipynb в прод:
+    маленький RandomizedSearchCV с TimeSeriesSplit вместо захардкоженных параметров.
+    Намеренно дёшево (n_iter=4) — вызывается на каждом переобучении в simulate().
+    При любой ошибке или нехватке данных тихо откатывается на LGBM_DEFAULT_PARAMS,
+    чтобы не ронять симуляцию.
+    """
+    if len(X) < LGBM_TUNE_MIN_ROWS:
+        return LGBM_DEFAULT_PARAMS
+    try:
+        from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+        from scipy.stats import randint, uniform
+
+        dist = {
+            "n_estimators": randint(60, 200),
+            "num_leaves": randint(8, 50),
+            "learning_rate": uniform(0.02, 0.13),
+            "min_child_samples": randint(10, 30),
+        }
+        search = RandomizedSearchCV(
+            LGBMRegressor(random_state=SEED, verbose=-1, subsample=0.85, colsample_bytree=0.85),
+            dist,
+            n_iter=LGBM_TUNE_N_ITER,
+            cv=TimeSeriesSplit(n_splits=3),
+            scoring="neg_mean_absolute_error",
+            n_jobs=1,
+            random_state=SEED,
+        ).fit(X, y)
+        best = dict(search.best_params_)
+        best.setdefault("subsample", 0.85)
+        best.setdefault("colsample_bytree", 0.85)
+        best.setdefault("max_depth", -1)
+        return best
+    except Exception as exc:  # подбор не должен ронять симуляцию
+        logger.warning(f"LightGBM-тюнинг не удался, использую дефолтные параметры: {exc}")
+        return LGBM_DEFAULT_PARAMS
+
+
+def fit_lightgbm_sales_model(df: pd.DataFrame, tune: bool = False) -> LGBMModelPack:
     if LGBMRegressor is None:
         return LGBMModelPack(None, [], False, ["Пакет lightgbm не установлен."], 1.0, 1.0)
     prep = _build_lgbm_training_frame(df)
@@ -112,17 +173,8 @@ def fit_lightgbm_sales_model(df: pd.DataFrame) -> LGBMModelPack:
     ]
     X = prep[features]
     y = prep["sales"].astype(float)
-    model = LGBMRegressor(
-        n_estimators=180,
-        learning_rate=0.05,
-        num_leaves=31,
-        max_depth=-1,
-        min_child_samples=20,
-        subsample=0.85,
-        colsample_bytree=0.85,
-        random_state=SEED,
-        verbose=-1,
-    )
+    params = _tune_lgbm_params(X, y) if tune else LGBM_DEFAULT_PARAMS
+    model = LGBMRegressor(random_state=SEED, verbose=-1, **params)
     model.fit(X, y)
     return LGBMModelPack(
         model=model,
@@ -268,21 +320,63 @@ def apply_rules(row: pd.Series, avg_sales_7d: float) -> tuple[float, str]:
 # ############################################################################
 
 
-def _fit_linear_sales_vs_price(our_prices: np.ndarray, sales: np.ndarray, fallback_price: float, cogs: float = 0.0) -> tuple[float, float, float, bool]:
+def _ols_fit_diagnostics(our_prices: np.ndarray, sales: np.ndarray, min_points: int = MIN_POINTS_FOR_RELIABLE_FIT) -> dict:
     """
-    Общая регрессия: Sales ≈ A - B*Price (B > 0 при надежной отрицательной эластичности).
-    Оптимум прибыли Profit = (P - C)*(A - B*P): P* = (A + B*C)/(2B).
+    Чистая диагностика OLS Sales~Price, без бизнес-логики откатов/клиппинга.
+    Используется и в _fit_linear_sales_vs_price (бинарный reliable),
+    и в simulate() для непрерывного веса доверия (blending).
     """
-    if len(our_prices) < 3:
-        return 0.0, 0.0, float(fallback_price), False
-
+    if len(our_prices) < min_points:
+        return {"a": 0.0, "b": 0.0, "coef": 0.0, "r2": 0.0, "n": int(len(our_prices))}
     X = our_prices.reshape(-1, 1)
     y = sales
     model = LinearRegression().fit(X, y)
     a = float(model.intercept_)
     coef = float(model.coef_[0])
-    is_reliable = coef < 0
+    r2 = float(r2_score(y, model.predict(X)))
     b = -coef if coef < 0 else 0.0
+    return {"a": a, "b": b, "coef": coef, "r2": r2, "n": int(len(our_prices))}
+
+
+def _confidence_weight(r2: float, coef: float, min_r2: float = MIN_R2_FOR_RELIABLE_FIT) -> float:
+    """
+    Непрерывный вес доверия регрессии в [0, 1] вместо бинарного reliable.
+    0 = эластичность не отрицательная (или данных мало) → полностью на эвристику.
+    1 = R^2 >= min_r2 → полностью на регрессию.
+    Между порогами — плавное смешивание (blending), чтобы цена/спрос не
+    "дёргались" на границе порога надёжности.
+    """
+    if coef >= 0 or min_r2 <= 0:
+        return 0.0
+    return float(np.clip(r2 / min_r2, 0.0, 1.0))
+
+
+def _fit_linear_sales_vs_price(
+    our_prices: np.ndarray,
+    sales: np.ndarray,
+    fallback_price: float,
+    cogs: float = 0.0,
+    min_points: int = MIN_POINTS_FOR_RELIABLE_FIT,
+    min_r2: float = MIN_R2_FOR_RELIABLE_FIT,
+) -> tuple[float, float, float, bool]:
+    """
+    Общая регрессия: Sales ≈ A - B*Price (B > 0 при надежной отрицательной эластичности).
+    Оптимум прибыли Profit = (P - C)*(A - B*P): P* = (A + B*C)/(2B).
+
+    "Надежность" требует не только отрицательного коэффициента, но и
+    минимального качества фита (R^2) на тех же точках, плюс минимального числа
+    наблюдений. Проверка только по знаку коэффициента пропускала модели,
+    которые на практике предсказывают хуже, чем константа (R^2 < 0) —
+    это подтвердилось на внешнем датасете (см. README/TESTS, раздел про
+    валидацию на Retail Price Optimization).
+
+    Бинарный reliable здесь сохранён для обратной совместимости вызовов
+    (fit_regression и т.п.). Для непрерывного смешивания (blending) в
+    симуляции используйте _ols_fit_diagnostics + _confidence_weight.
+    """
+    diag = _ols_fit_diagnostics(our_prices, sales, min_points=min_points)
+    a, b, coef, fit_r2 = diag["a"], diag["b"], diag["coef"], diag["r2"]
+    is_reliable = (coef < 0) and (fit_r2 >= min_r2)
     if b > 0:
         raw_opt = float((a + b * cogs) / (2 * b))
         p_min_obs = float(np.min(our_prices))
@@ -502,6 +596,10 @@ def simulate(
     reg_a = np.zeros(n_entities, dtype=float)
     reg_b = np.zeros(n_entities, dtype=float)
     reg_rel = np.zeros(n_entities, dtype=bool)
+    # Непрерывный вес доверия (0..1) вместо бинарного reg_rel — используется для
+    # плавного смешивания (blending) цены и спроса между регрессией и эвристикой,
+    # чтобы не было резкого скачка на границе порога надёжности.
+    reg_weight = np.zeros(n_entities, dtype=float)
     reg_target_prices = np.zeros(n_entities, dtype=float)
     season_phase = np.array([SEASONALITY_PHASE.get(p, 0.0) for p in products_by_entity], dtype=float)
 
@@ -615,18 +713,28 @@ def simulate(
                         ho = history_oos[i][-len(hp):] if len(hp) > 0 else np.array([], dtype=bool)
                         valid_mask = (~ho) & (hs > 0)
                         if np.sum(valid_mask) >= 3:
-                            a_i, b_i, opt_i, rel_i = _fit_linear_sales_vs_price(
-                                hp[valid_mask],
-                                hs[valid_mask],
-                                float(last_our_prices[i]),
-                                float(cogs[i]),
-                            )
+                            diag_i = _ols_fit_diagnostics(hp[valid_mask], hs[valid_mask])
+                            a_i, b_i, coef_i, r2_i = diag_i["a"], diag_i["b"], diag_i["coef"], diag_i["r2"]
+                            rel_i = (coef_i < 0) and (r2_i >= MIN_R2_FOR_RELIABLE_FIT)
+                            w_i = _confidence_weight(r2_i, coef_i)
+                            if b_i > 0:
+                                raw_opt = float((a_i + b_i * float(cogs[i])) / (2 * b_i))
+                                p_min_obs = float(np.min(hp[valid_mask]))
+                                p_max_obs = float(np.max(hp[valid_mask]))
+                                p_floor = max(1.0, float(cogs[i]) * 1.03, p_min_obs * 0.85)
+                                p_ceiling = max(p_floor, p_max_obs * 1.25)
+                                opt_i = round(float(np.clip(raw_opt, p_floor, p_ceiling)), 2)
+                            else:
+                                opt_i = float(last_our_prices[i])
                         else:
-                            a_i, b_i, opt_i, rel_i = 0.0, 0.0, float(last_our_prices[i]), False
+                            a_i, b_i, opt_i, rel_i, w_i = 0.0, 0.0, float(last_our_prices[i]), False, 0.0
                         reg_a[i] = a_i
                         reg_b[i] = b_i
                         reg_rel[i] = rel_i
-                        target_price = float(opt_i) if rel_i else float(last_our_prices[i])
+                        reg_weight[i] = w_i
+                        # Смешиваем оптимум регрессии с текущей ценой по весу доверия,
+                        # а не переключаемся бинарно — убирает скачок на границе порога.
+                        target_price = w_i * float(opt_i) + (1.0 - w_i) * float(last_our_prices[i])
                         step_limit = abs(float(max_daily_price_change_pct)) / 100.0
                         lower = max(1.0, float(last_our_prices[i]) * (1.0 - step_limit))
                         upper = max(lower, float(last_our_prices[i]) * (1.0 + step_limit))
@@ -651,7 +759,7 @@ def simulate(
                         "is_oos": history_oos[i][hw],
                         "cogs": np.full(n_i, float(cogs[i])),
                     }).sort_values("date")
-                    lgbm_packs_by_entity.append(fit_lightgbm_sales_model(hist_df))
+                    lgbm_packs_by_entity.append(fit_lightgbm_sales_model(hist_df, tune=True))
             if method == 'lightgbm':
                 for i in range(n_entities):
                     # Экономим время симуляции: для инференса из истории нужны только последние продажи для lags
@@ -692,22 +800,22 @@ def simulate(
         new_sales = np.zeros(n_entities)
 
         if method == 'regression':
-            valid_mask = reg_rel & (reg_b > 0)
-
-            # Надежная регрессия
+            # Раньше было бинарное разделение (valid_mask = reg_rel & (reg_b > 0)):
+            # сущность целиком на регрессии ИЛИ целиком на эвристике. Теперь считаем
+            # оба прогноза для всех и смешиваем по непрерывному весу доверия reg_weight —
+            # это устраняет резкий скачок прогноза на границе порога надёжности.
             noise_scale_reg = np.maximum(2.0, 0.08 * np.maximum(np.abs(reg_a - reg_b * rec_prices), 1.0))
-            new_sales[valid_mask] = calc_demand_regression(
+            sales_reg = calc_demand_regression(
                 rec_prices, reg_a, reg_b, rng.normal(0, noise_scale_reg, size=n_entities)
-            )[valid_mask]
+            )
 
-            # Откат на эвристику (ненадежная регрессия)
-            invalid_mask = ~valid_mask
-            if invalid_mask.any():
-                noise_rules = rng.normal(0, np.maximum(2.0, 0.08 * seasonal_base_sales[invalid_mask]))
-                new_sales[invalid_mask] = calc_demand_rules(
-                    rec_prices[invalid_mask], competitor_prices[invalid_mask], base_prices[invalid_mask],
-                    seasonal_base_sales[invalid_mask], elasticities[invalid_mask], noise_rules
-                )
+            noise_rules_all = rng.normal(0, np.maximum(2.0, 0.08 * seasonal_base_sales))
+            sales_rules = calc_demand_rules(
+                rec_prices, competitor_prices, base_prices, seasonal_base_sales, elasticities, noise_rules_all
+            )
+
+            w = np.where(reg_b > 0, reg_weight, 0.0)
+            new_sales = w * sales_reg + (1.0 - w) * sales_rules
             # Для регрессионной ветки также учитываем сезонный множитель спроса.
             new_sales = np.maximum(0.0, np.round(new_sales * seasonal_multiplier))
         elif method == 'lightgbm':
