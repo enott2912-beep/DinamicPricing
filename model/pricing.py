@@ -56,6 +56,14 @@ DEFAULT_ELASTICITY = 2.0
 MIN_POINTS_FOR_RELIABLE_FIT = 5
 MIN_R2_FOR_RELIABLE_FIT = 0.25
 
+LGBM_R2_THRESHOLD = 0.20
+LGBM_MAE_RATIO_MAX = 0.50
+LGBM_HOLDOUT_RATIO = 0.20
+LGBM_HOLDOUT_MIN_ROWS = 5
+LGBM_PRICE_QUANTILE_LO = 0.05
+LGBM_PRICE_QUANTILE_HI = 0.95
+LGBM_EXTRAP_DECAY_WIDTH = 0.10
+
 
 @dataclass
 class LGBMModelPack:
@@ -65,6 +73,9 @@ class LGBMModelPack:
     warnings: list[str]
     p_min: float
     p_max: float
+    trust_weight: float = 1.0
+    r2_holdout: float | None = None
+    mae_ratio: float | None = None
 
 
 def _lgbm_data_warnings(df: pd.DataFrame) -> list[str]:
@@ -155,34 +166,85 @@ def _tune_lgbm_params(X: pd.DataFrame, y: pd.Series) -> dict:
         return LGBM_DEFAULT_PARAMS
 
 
+def _lgbm_trust_weight(r2: float, mae_ratio: float) -> float:
+    """Плавный вес доверия LightGBM по holdout-метрикам."""
+    if r2 < LGBM_R2_THRESHOLD or mae_ratio > LGBM_MAE_RATIO_MAX:
+        return 0.0
+    return float(min(1.0, r2 / 0.60))
+
+
+def _extrapolation_weight(price: float, p_lo: float, p_hi: float) -> float:
+    """Снижает вес модели для цен за пределами исторического диапазона."""
+    if p_lo >= p_hi:
+        return 0.0
+    if p_lo <= price <= p_hi:
+        return 1.0
+    range_width = p_hi - p_lo
+    dist = (p_lo - price) / range_width if price < p_lo else (price - p_hi) / range_width
+    return float(max(0.0, 1.0 - dist / LGBM_EXTRAP_DECAY_WIDTH))
+
+
 def fit_lightgbm_sales_model(df: pd.DataFrame, tune: bool = False) -> LGBMModelPack:
     if LGBMRegressor is None:
-        return LGBMModelPack(None, [], False, ["Пакет lightgbm не установлен."], 1.0, 1.0)
+        return LGBMModelPack(None, [], False, ["Пакет lightgbm не установлен."], 1.0, 1.0, trust_weight=0.0)
     prep = _build_lgbm_training_frame(df)
     if prep.empty:
-        return LGBMModelPack(None, [], False, ["Недостаточно валидных строк после очистки."], 1.0, 1.0)
+        return LGBMModelPack(None, [], False, ["Недостаточно валидных строк после очистки."], 1.0, 1.0, trust_weight=0.0)
     warnings = _lgbm_data_warnings(prep)
+    p_min = float(prep["our_price"].quantile(LGBM_PRICE_QUANTILE_LO)) if len(prep) else 1.0
+    p_max = float(prep["our_price"].quantile(LGBM_PRICE_QUANTILE_HI)) if len(prep) else max(1.0, p_min)
+    if p_max <= p_min:
+        p_max = max(p_min + 1.0, p_max)
+
     if warnings:
         # Для слабых данных лучше сразу откатиться, чем обучать нестабильную модель.
-        p_min = float(prep["our_price"].quantile(0.05)) if len(prep) else 1.0
-        p_max = float(prep["our_price"].quantile(0.95)) if len(prep) else max(1.0, p_min)
-        return LGBMModelPack(None, [], False, warnings, p_min, p_max)
+        return LGBMModelPack(None, [], False, warnings, p_min, p_max, trust_weight=0.0)
     features = [
         "our_price", "competitor_price", "price_gap", "doy_sin", "doy_cos",
         "dow", "month", "sales_lag1", "sales_lag7", "sales_roll7",
     ]
-    X = prep[features]
-    y = prep["sales"].astype(float)
-    params = _tune_lgbm_params(X, y) if tune else LGBM_DEFAULT_PARAMS
+
+    split_idx = int(len(prep) * (1.0 - LGBM_HOLDOUT_RATIO))
+    split_idx = max(1, min(split_idx, len(prep)))
+    df_train = prep.iloc[:split_idx]
+    df_hold = prep.iloc[split_idx:]
+    can_validate = len(df_hold) >= LGBM_HOLDOUT_MIN_ROWS
+
+    X_train = df_train[features]
+    y_train = df_train["sales"].astype(float)
+    params = _tune_lgbm_params(X_train, y_train) if tune else LGBM_DEFAULT_PARAMS
     model = LGBMRegressor(random_state=SEED, verbose=-1, **params)
-    model.fit(X, y)
+    model.fit(X_train, y_train)
+
+    r2_holdout: float | None = None
+    mae_ratio: float | None = None
+    trust_weight = 1.0
+    reliable = True
+
+    if can_validate:
+        from sklearn.metrics import mean_absolute_error
+
+        preds = model.predict(df_hold[features])
+        y_hold = df_hold["sales"].astype(float)
+        r2_holdout = float(r2_score(y_hold, preds))
+        mae = float(mean_absolute_error(y_hold, preds))
+        mean_sales = float(y_hold.mean())
+        mae_ratio = mae / mean_sales if mean_sales > 0 else 999.0
+        trust_weight = _lgbm_trust_weight(r2_holdout, mae_ratio)
+        reliable = trust_weight > 0.0
+    else:
+        warnings.append("holdout_too_small:cannot_validate_quality")
+
     return LGBMModelPack(
         model=model,
         features=features,
-        reliable=(len(warnings) == 0),
+        reliable=reliable,
         warnings=warnings,
-        p_min=float(prep["our_price"].quantile(0.05)),
-        p_max=float(prep["our_price"].quantile(0.95)),
+        p_min=p_min,
+        p_max=p_max,
+        trust_weight=trust_weight,
+        r2_holdout=r2_holdout,
+        mae_ratio=mae_ratio,
     )
 
 
@@ -263,8 +325,13 @@ def predict_sales_lightgbm_with_pack(
     price: float,
     competitor_price: float,
 ) -> float:
+    fallback = float(history_df["sales"].tail(7).mean()) if len(history_df) else 0.0
     if model_pack.model is None:
-        return float(history_df["sales"].tail(7).mean()) if len(history_df) else 0.0
+        return fallback
+    w_quality = float(model_pack.trust_weight)
+    w_range = _extrapolation_weight(float(price), float(model_pack.p_min), float(model_pack.p_max))
+    w_final = w_quality * w_range
+
     last_sales = float(history_df["sales"].iloc[-1]) if len(history_df) else 0.0
     lag7 = float(history_df["sales"].tail(7).mean()) if len(history_df) else 0.0
     day_of_year = float(next_date.dayofyear)
@@ -280,7 +347,9 @@ def predict_sales_lightgbm_with_pack(
         "sales_lag7": [lag7],
         "sales_roll7": [lag7],
     })
-    return float(max(0.0, model_pack.model.predict(row[model_pack.features])[0]))
+    lgbm_pred = float(max(0.0, model_pack.model.predict(row[model_pack.features])[0]))
+    demand = w_final * lgbm_pred + (1.0 - w_final) * fallback
+    return float(max(0.0, demand))
 
 # ############################################################################
 # 2. ЭВРИСТИЧЕСКОЕ ЦЕНООБРАЗОВАНИЕ (RULE-BASED)
