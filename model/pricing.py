@@ -45,7 +45,14 @@ SEASONALITY_PHASE = {
 
 LGBM_MIN_ROWS = 60
 LGBM_MIN_UNIQUE_PRICES = 8
-LGBM_MIN_PRICE_STD = 1.0
+# Порог вариативности цены задан коэффициентом вариации (std/mean), а не
+# абсолютным std. Старый порог LGBM_MIN_PRICE_STD=1.0 был калиброван под
+# рублёвые цены (80-500 руб) и ошибочно отбраковывал валидные данные с малой
+# абсолютной ценой, но заметной относительной вариативностью — например,
+# датасет Avocado Prices (Kaggle): цена ~$1.36, std=$0.21 (CV≈15%), что
+# было полностью отброшено старым порогом (std=0.21 < 1.0), хотя 15% — это
+# существенная вариативность для обучения модели. См. tests/test_lgbm_thresholds_scale_invariant.py.
+LGBM_MIN_PRICE_CV = 0.03
 DEFAULT_ELASTICITY = 2.0
 
 # Пороги надёжности линейной регрессии Sales ≈ A - B*Price.
@@ -87,9 +94,11 @@ def _lgbm_data_warnings(df: pd.DataFrame) -> list[str]:
     if uniq_prices < LGBM_MIN_UNIQUE_PRICES:
         msgs.append(f"Слабая вариативность цены: уникальных значений {uniq_prices} (< {LGBM_MIN_UNIQUE_PRICES}).")
     if n_rows > 1:
+        price_mean = float(df["our_price"].mean())
         price_std = float(df["our_price"].std(ddof=0))
-        if price_std < LGBM_MIN_PRICE_STD:
-            msgs.append(f"Слишком узкий диапазон цен: std={price_std:.2f}.")
+        price_cv = price_std / price_mean if price_mean > 0 else 0.0
+        if price_cv < LGBM_MIN_PRICE_CV:
+            msgs.append(f"Слишком узкий диапазон цен: CV={price_cv:.1%} (std={price_std:.2f}, mean={price_mean:.2f}).")
     return msgs
 
 

@@ -60,10 +60,20 @@ def rule_engine(tmp_path: Path, sample_rules: list[dict]) -> RuleEngine:
 
 @pytest.fixture
 def lgbm_training_df() -> pd.DataFrame:
-    """≥60 дней, вариативные цены — достаточно для обучения LightGBM после лагов."""
+    """
+    ≥60 дней, вариативные цены — достаточно для обучения LightGBM после лагов.
+
+    Цена колеблется синусоидой БЕЗ линейного тренда: если бы цена со временем
+    дрейфовала вверх/вниз (как было раньше: + np.linspace(-4, 4, n)), отложенный
+    отрезок (последние 20% по времени, holdout) видел бы цены за пределами
+    диапазона, на котором обучалась модель — деревья LightGBM не умеют
+    экстраполировать, и holdout R^2 уходил в сильный минус не из-за плохой
+    модели, а из-за самой фикстуры. См. model/pricing.py: fit_lightgbm_sales_model
+    (holdout-валидация по времени, добавлена для проверки качества после фита).
+    """
     n = 70
     dates = pd.date_range("2024-06-01", periods=n, freq="D")
-    prices = 85.0 + 8.0 * np.sin(np.linspace(0, 5 * np.pi, n)) + np.linspace(-4, 4, n)
+    prices = 85.0 + 8.0 * np.sin(np.linspace(0, 5 * np.pi, n))
     rows = []
     for d, p in zip(dates, prices):
         p = float(round(p, 2))
