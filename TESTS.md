@@ -23,14 +23,17 @@ pytest
 | `test_data_validation.py` | `ui/data_manager.py` → `_validate_loaded_data` | 5 |
 | `test_pricing_lightgbm.py` | `model/pricing.py` (LightGBM) | 9 |
 | `test_simulate.py` | `model/pricing.py` → `simulate` | 16 |
-| **Итого** | | **71** |
+| `test_external_dataset_sanity.py` | `model/pricing.py` (регрессия) на Retail Price | 4 |
+| `test_lgbm_thresholds_scale_invariant.py` | `model/pricing.py` (LightGBM) на Avocado | 3 |
+| `test_is_oos_parsing.py` | `model/utils.py`, `ui/data_manager.py` | 26 |
+| **Итого** | | **104** |
 
 ### `conftest.py` (не тесты)
 
 | Фикстура | Назначение |
 |----------|------------|
 | `minimal_sales_df` | 8 дней истории по SKU «Молоко» с согласованными revenue/profit |
-| `lgbm_training_df` | 70 дней с вариативными ценами — достаточно для обучения LightGBM |
+| `lgbm_training_df` | 70 дней с вариативными ценами — достаточно для обучения LightGBM. **Изменено:** убран линейный тренд цены (`+ np.linspace(-4, 4, n)`), который вызывал экстраполяцию между train и holdout и давал ложно плохие метрики. |
 | `sim_history_df` | 21 день, одна сущность с иерархией store/brand — для `simulate` |
 | `sim_history_multi_entity` | 14 дней, «Молоко» + «Кофе» — фильтр SKU и число строк |
 | `sample_rules` | Два правила для `RuleEngine` (первое всегда срабатывает) |
@@ -68,10 +71,10 @@ pytest
 | 24 | `test_rules_engine.py` | `test_save_rules_session_success_uses_db` | `RuleEngine._save_rules_to_session` | Успешное сохранение сессии → данные в SQLite, глобальный файл не трогается. |
 | 25 | `test_pricing_regression.py` | `test_fit_linear_sales_vs_price_insufficient_data` | `_fit_linear_sales_vs_price` | Меньше 3 точек → модель ненадёжна, fallback-цена. |
 | 26 | `test_pricing_regression.py` | `test_fit_linear_sales_vs_price_negative_slope_reliable` | `_fit_linear_sales_vs_price` | Sales падают с ценой → B>0, `reliable=True`, оптимум ≥ 1. |
-| 27 | `test_pricing_regression.py` | `test_fit_linear_optimal_price_near_formula` | `_fit_linear_sales_vs_price` | Оптимальная цена близка к (A+B·COGS)/(2B) с учётом клиппинга. |
+| 27 | `test_pricing_regression.py` | `test_fit_linear_optimal_price_near_formula` | `_fit_linear_sales_vs_price` | Оптимальная цена близка к (A+B*COGS)/(2B) с учётом клиппинга |
 | 28 | `test_pricing_regression.py` | `test_fit_regression_filters_oos` | `fit_regression` | Строки `is_oos=True` с аномальными sales не портят обучение. |
 | 29 | `test_pricing_regression.py` | `test_fit_regression_filters_zero_sales` | `fit_regression` | День с `sales=0` исключается из обучения. |
-| 30 | `test_pricing_regression.py` | `test_predict_sales_regression_formula` | `predict_sales_regression` | Спрогноз = max(0, round(A−B·Price)) без шума. |
+| 30 | `test_pricing_regression.py` | `test_predict_sales_regression_formula` | `predict_sales_regression` | Спрогноз = max(0, round(A-B*Price)) без шума |
 | 31 | `test_pricing_regression.py` | `test_predict_sales_regression_with_noise` | `predict_sales_regression` | То же с добавлением шума в формулу. |
 | 32 | `test_pricing_regression.py` | `test_products_in_dataframe_order` | `products_in_dataframe` | Уникальные SKU из df, стабильная сортировка по имени. |
 | 33 | `test_pricing_regression.py` | `test_products_in_dataframe_custom_sku` | `products_in_dataframe` | Произвольное имя товара (не из `PRODUCTS`) попадает в список. |
@@ -97,25 +100,36 @@ pytest
 | 53 | `test_pricing_lightgbm.py` | `test_recommend_price_lightgbm_fallback_when_unreliable` | `recommend_price_lightgbm` | Слабые данные → цена не меняется (hold последней). |
 | 54 | `test_pricing_lightgbm.py` | `test_predict_sales_lightgbm_non_negative` | `predict_sales_lightgbm_with_pack` | Прогноз спроса ≥ 0 при обученной модели. |
 | 55 | `test_pricing_lightgbm.py` | `test_predict_sales_fallback_when_no_model` | `predict_sales_lightgbm_with_pack` | Без модели → среднее sales за 7 дней. |
+| 56 | `test_simulate.py` | `test_simulate_appends_n_steps_days` | `simulate` | После n_steps уникальных дат стало ровно на столько больше |
+| 57 | `test_simulate.py` | `test_simulate_future_dates_after_history_max` | `simulate` | Все новые даты строго позже конца истории |
+| 58 | `test_simulate.py` | `test_simulate_output_schema` | `simulate` | В будущих строках есть цены, спрос, выручка, прибыль, конкуренты |
+| 59 | `test_simulate.py` | `test_simulate_invariants` | `simulate` | our_price >= 1, sales >= 0, revenue >= 0 на прогнозных днях |
+| 60 | `test_simulate.py` | `test_simulate_accounting` | `simulate` | revenue = sales*price, profit = revenue - sales*cogs |
+| 61 | `test_simulate.py` | `test_simulate_reproducible_rules` | `simulate` | Два прогона method=rules с одним df -> идентичный будущий хвост (SEED) |
+| 62 | `test_simulate.py` | `test_simulate_empty_or_no_products` | `simulate` | Пустой df -> без строк; произвольный SKU -> n_steps новых дней без падения |
+| 63 | `test_simulate.py` | `test_simulate_target_product_filter` | `simulate` | target_product ограничивает прогноз одним SKU |
+| 64 | `test_simulate.py` | `test_simulate_row_count` | `simulate` | Число прогнозных строк = n_steps * число сущностей |
+| 65 | `test_simulate.py` | `test_simulate_regression_completes` | `simulate` | method=regression завершается на 21 дне истории |
+| 66 | `test_simulate.py` | `test_simulate_regression_daily_price_step_limit` | `simulate` | Шаг цены между днями в пределах max_daily_price_change_pct |
+| 67 | `test_simulate.py` | `test_simulate_regression_train_window_clipped` | `simulate` | Окно 999 дней при короткой истории не роняет симуляцию |
+| 68 | `test_simulate.py` | `test_simulate_rules_completes` | `simulate` | method=rules smoke на 5 шагов |
+| 69 | `test_simulate.py` | `test_simulate_rules_with_patched_engine` | `simulate` | С моком правила price*1.1 первая будущая цена соответствует правилу |
+| 70 | `test_simulate.py` | `test_simulate_lightgbm_completes` | `simulate` | method=lightgbm на длинной истории - без падения, sales >= 0 |
+| 71 | `test_simulate.py` | `test_simulate_lightgbm_short_history` | `simulate` | Короткая история + lightgbm - fallback, без падения |
+| 72 | `test_external_dataset_sanity.py` | `test_external_dataset_loads_with_expected_columns` | (загрузка) | Датасет Retail Price: загрузка, колонки, >= 30 SKU, >= 300 строк |
+| 73 | `test_external_dataset_sanity.py` | `test_reliability_rate_is_not_inflated` | `_fit_linear_sales_vs_price` | Доля reliable по новому критерию (R2 >= 0.25) не превышает 40% |
+| 74 | `test_external_dataset_sanity.py` | `test_confidence_weight_is_fractional_for_weak_fits` | `_ols_fit_diagnostics`, `_confidence_weight` | Для слабого отриц. коэффициента вес доверия строго между 0 и 1 |
+| 75 | `test_external_dataset_sanity.py` | `test_simulate_regression_runs_on_external_data_without_crashing` | `simulate` | method=regression на шумных внешних данных - без исключений, цены > 0 |
+| 76 | `test_lgbm_thresholds_scale_invariant.py` | `test_avocado_fixture_has_low_absolute_but_real_relative_variability` | (sanity) | Фикстура avocado: маленький abs std (< 1.0), но CV > LGBM_MIN_PRICE_CV |
+| 77 | `test_lgbm_thresholds_scale_invariant.py` | `test_lgbm_price_variability_threshold_is_scale_invariant` | `_lgbm_data_warnings` | Ни одна сущность не получает false positive предупреждение о диапазоне цен |
+| 78 | `test_lgbm_thresholds_scale_invariant.py` | `test_lgbm_fits_and_runs_holdout_validation_on_avocado_data` | `fit_lightgbm_sales_model` | Модель обучается на avocado, holdout R2 и MAE ratio не None |
+| 79 | `test_is_oos_parsing.py` | `test_parse_is_oos_value` (param x16) | `parse_is_oos_value` | 16 форматов is_oos (False, True, 0, 1, "false", "Да", "отсутствует") -> bool |
+| 80 | `test_is_oos_parsing.py` | `test_parse_is_oos_series_mixed_strings` | `parse_is_oos_series` | Серия со смешанными строковыми значениями -> корректный список bool |
+| 81 | `test_is_oos_parsing.py` | `test_parse_is_oos_value_unknown_raises` | `parse_is_oos_value` | Неизвестное значение -> ValueError |
+| 82 | `test_is_oos_parsing.py` | `test_validate_loaded_data_is_oos_false_strings` (param x4) | `_validate_loaded_data` | is_oos = "Нет"/"no"/"0"/"false" -> False, без st.error |
+| 83 | `test_is_oos_parsing.py` | `test_validate_loaded_data_is_oos_true_strings` (param x4) | `_validate_loaded_data` | is_oos = "Да"/"yes"/"1"/"отсутствует" -> True, без st.error |
 
-| 56 | `test_simulate.py` | `test_simulate_appends_n_steps_days` | `simulate` | После `n_steps` уникальных дат стало ровно на столько больше. |
-| 57 | `test_simulate.py` | `test_simulate_future_dates_after_history_max` | `simulate` | Все новые даты строго позже конца истории. |
-| 58 | `test_simulate.py` | `test_simulate_output_schema` | `simulate` | В будущих строках есть цены, спрос, выручка, прибыль, конкуренты. |
-| 59 | `test_simulate.py` | `test_simulate_invariants` | `simulate` | `our_price ≥ 1`, `sales ≥ 0`, `revenue ≥ 0` на прогнозных днях. |
-| 60 | `test_simulate.py` | `test_simulate_accounting` | `simulate` | `revenue ≈ sales×price`, `profit ≈ revenue − sales×cogs`. |
-| 61 | `test_simulate.py` | `test_simulate_reproducible_rules` | `simulate` | Два прогона `method=rules` с одним df → идентичный будущий хвост (SEED). |
-| 62 | `test_simulate.py` | `test_simulate_empty_or_no_products` | `simulate` | Пустой df → без строк; произвольный SKU → `n_steps` новых дней без падения. |
-| 63 | `test_simulate.py` | `test_simulate_target_product_filter` | `simulate` | `target_product` ограничивает прогноз одним SKU. |
-| 64 | `test_simulate.py` | `test_simulate_row_count` | `simulate` | Число прогнозных строк = `n_steps ×` число сущностей. |
-| 65 | `test_simulate.py` | `test_simulate_regression_completes` | `simulate` | `method=regression` завершается на 21 дне истории. |
-| 66 | `test_simulate.py` | `test_simulate_regression_daily_price_step_limit` | `simulate` | Шаг цены между днями в пределах `max_daily_price_change_pct`. |
-| 67 | `test_simulate.py` | `test_simulate_regression_train_window_clipped` | `simulate` | Окно 999 дней при короткой истории не роняет симуляцию. |
-| 68 | `test_simulate.py` | `test_simulate_rules_completes` | `simulate` | `method=rules` smoke на 5 шагов. |
-| 69 | `test_simulate.py` | `test_simulate_rules_with_patched_engine` | `simulate` | С моком правила `price×1.1` первая будущая цена соответствует правилу. |
-| 70 | `test_simulate.py` | `test_simulate_lightgbm_completes` | `simulate` | `method=lightgbm` на длинной истории — без падения, sales ≥ 0. |
-| 71 | `test_simulate.py` | `test_simulate_lightgbm_short_history` | `simulate` | Короткая история + lightgbm — fallback, без падения. |
-
-**Итого: 71 тест** (P0: 24, P1: 19, Custom CSV: 3, LightGBM: 9, simulate: 16). Если `lightgbm` не установлен, 11 тестов пропускаются (`pytest.skip`).
+**Итого: 104 теста** (P0: 24, P1: 19, Custom CSV: 3, LightGBM: 9, Simulate: 16, External sanity: 4, Scale-invariant: 3, OOS parsing: 26). Если `lightgbm` не установлен, 11 тестов пропускаются (`pytest.skip`).
 
 ---
 
@@ -123,9 +137,10 @@ pytest
 
 | Приоритет | Файлы | Фокус |
 |-----------|--------|--------|
-| **P0** | `test_math_engine`, `test_rules_validator`, `test_rules_engine` | Формулы спроса и конкурентов; валидация Rule Engine; сессионное сохранение правил без перезаписи глобального JSON |
+| **P0** | `test_math_engine`, `test_rules_validator`, `test_rules_engine`, `test_is_oos_parsing` | Формулы спроса и конкурентов; валидация Rule Engine; сессионное сохранение правил; разбор разных форматов is_oos |
 | **P1** | `test_pricing_regression`, `test_pricing_forecast`, `test_data_validation` | Линейная регрессия и прогноз; валидация загружаемого CSV |
+| **External datasets** | `test_external_dataset_sanity`, `test_lgbm_thresholds_scale_invariant` | Валидация на реальных датасетах (Retail Price - регрессия, Avocado - LightGBM); регрессионные барьеры |
 | **Custom CSV** | `test_custom_csv_products` | Произвольные SKU: рекомендации, симуляция, `infer_entity_params` |
 | **LightGBM** | `test_pricing_lightgbm` | Обучение, рекомендация цены, прогноз спроса (smoke) |
-| **Simulate (P2)** | `test_simulate` | Цикл «история → N дней»: даты, инварианты, rules/regression/lightgbm |
+| **Simulate (P2)** | `test_simulate` | Цикл "история -> N дней": даты, инварианты, rules/regression/lightgbm |
 
